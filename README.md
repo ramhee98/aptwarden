@@ -267,3 +267,7 @@ APTWARDEN_IT_NETWORK=1 \
 
 CI runs the unit tests on Python 3.11 to 3.13, and in `debian:12` and `debian:13`
 containers with Debian's packages only.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
