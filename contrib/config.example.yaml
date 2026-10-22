@@ -27,6 +27,15 @@ sources:
     max_age: 3d                    # warn if the feed could not be verified for this long
   osv:
     enabled: true
+  custom:                          # own definitions from a Git repository
+    enabled: false
+    url: https://github.com/ramhee98/aptwarden-definitions.git
+    ref: signed-tags               # signed-tags: newest signed vYYYY.MM.DD tag (recommended)
+                                   # branch: follow `branch` WITHOUT verification (forks, tests)
+    branch: main
+    allowed_signers_file: /etc/aptwarden/allowed_signers   # keys whose tags are trusted
+    path: definitions              # directory inside the repository
+    refresh_interval: 1h
 
 enrich:
   cvss:

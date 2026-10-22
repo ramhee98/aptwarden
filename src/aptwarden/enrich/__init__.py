@@ -21,11 +21,13 @@ def normalize_urgency(urgency: str | None) -> str:
 
 def assess(finding: Finding, cvss: CvssResult | None) -> None:
     """Set severity and reason on a finding. Order (docs/architecture.md):
-    Debian "unimportant" > CVSS > Debian urgency > unknown."""
+    custom definition > Debian "unimportant" > CVSS > Debian urgency > unknown."""
     urgency = normalize_urgency(finding.urgency)
     if cvss is not None:
         finding.cvss_score = cvss.score
         finding.cvss_vector = cvss.vector
+    if finding.definition:
+        return  # a custom definition set the severity and has the last word
     if urgency == "unimportant":
         finding.severity = Severity.LOW
         finding.severity_reason = "debian: unimportant"

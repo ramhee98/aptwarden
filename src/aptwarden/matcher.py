@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from aptwarden.models import Finding
+from aptwarden.models import Finding, FindingStatus
 
 
 def merge(per_source: list[tuple[int, list[Finding]]]) -> list[Finding]:
@@ -29,4 +29,6 @@ def merge(per_source: list[tuple[int, list[Finding]]]) -> list[Finding]:
                 current.description = f.description
             if not current.urgency:
                 current.urgency = f.urgency
-    return sorted(merged.values(), key=lambda f: f.key)
+    # A custom definition saying "not affected" overrules every other source.
+    kept = (f for f in merged.values() if f.status != FindingStatus.NOT_AFFECTED)
+    return sorted(kept, key=lambda f: f.key)

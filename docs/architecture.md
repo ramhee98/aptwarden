@@ -31,9 +31,9 @@ healthcheck and rollback.
 |---|---|
 | `transport` | `ssh` (OpenSSH with connection multiplexing) and `local` |
 | `inventory` | `dpkg-query` (binary + source package, versions, status), os-release, architecture, facts such as unattended-upgrades and needrestart |
-| `sources` | Vulnerability source plugins: `debian_tracker`, `osv`, later `custom` (GitHub definitions) and `trivy` (Docker images) |
+| `sources` | Vulnerability source plugins: `custom` (own definitions from Git), `debian_tracker`, `osv`, later `trivy` (Docker images) |
 | `enrich` | Severity normalisation: CVSS (OSV CVE records, NVD fallback) and CISA KEV |
-| `matcher` | Merges findings from all sources per (host, source package, vulnerability); precedence custom > debian_tracker > osv |
+| `matcher` | Merges findings from all sources per (host, source package, vulnerability); precedence custom > debian_tracker > osv; drops `not-affected` |
 | `state` | SQLite: runs, per-host results, findings, first-seen tracking |
 | `report` | Text and JSON output |
 | `cli` | `report`, `status`, `hosts check`, `sources refresh`, `config check` |
@@ -84,7 +84,7 @@ important for Docker images and language ecosystems later.
 The Debian tracker only carries an `urgency`, and most entries are "not yet assigned".
 aptwarden computes a normalised severity:
 
-1. a custom definition's severity (phase 3)
+1. a custom definition's severity
 2. Debian urgency `unimportant` → `low` (Debian knows when an issue does not apply to its
    build)
 3. CVSS base score → critical (>= 9.0), high (>= 7.0), medium (>= 4.0), low (> 0)
@@ -153,41 +153,61 @@ A sudoers rule on `apt-get` itself amounts to root. `apt-get install *` allows
 - sudo grants the `aptwarden` user this one script.
 - Inventory needs no privileges at all.
 
-## Custom definitions (phase 3)
+## Custom definitions
 
-The definitions live in a separate public repository with YAML files. The format follows
-OSV range semantics:
+Definitions live in a separate public repository
+([aptwarden-definitions](https://github.com/ramhee98/aptwarden-definitions)): one
+YAML file per definition, validated against `schemas/definition-v1.schema.json`
+plus semantic checks (versions parse, ranges ordered, unique ids matching file
+names, `auto-patch` has a fixed version).
 
 ```yaml
 schema_version: 1
-id: AW-2026-0001
-aliases: [CVE-2026-12345]
-summary: "openssl: remote code execution in ..."
-severity: critical            # critical | high | medium | low
-package: openssl              # Debian source package
+id: AW-2026-0002
+aliases: [CVE-2026-24061]
+summary: "inetutils telnetd: remote authentication bypass"
+severity: critical
+package: inetutils            # Debian source package
 affected:
-  - release: bookworm
-    ranges: [{introduced: "0", fixed: "3.0.17-1~deb12u3"}]
+  - release: trixie           # or "any"
+    ranges: [{introduced: "0", fixed: "2:2.6-3+deb13u1"}]
 action: auto-patch            # report | auto-patch | block
-references: [https://example.org/advisory]
 ```
 
-Trust model for a public repository:
+**Precedence.** The `custom` source has the highest priority. For every
+vulnerability a definition lists, the definition decides status, fixed version
+and severity. If the installed version is outside its ranges, the definition
+emits `not-affected` and the matcher drops other sources' findings for that
+vulnerability (false-positive overrides).
 
-- **Definitions can only tighten local policy, never loosen it.** `auto-patch` takes effect
-  only if the host policy already allows auto-patching for that severity.
-- **Every new commit must be signed.** aptwarden checks every commit since the last
-  verified head with `git verify-commit` against a locally configured `allowed_signers`
-  file, never one from the repository. Signature or schema failures keep the last good
-  state active and raise an alert.
-- **Definitions are data only.** They never contain package sources, commands or scripts.
-- **`block`** marks the affected versions as known-bad (think xz 5.6.x). aptwarden
-  - never installs them,
-  - reports them as critical when they are installed,
-  - can optionally write an apt preferences file per host (`enforce_block: pin`) with
-    Pin-Priority -1.
-- **The JSON schema ships with aptwarden.** The definitions repository validates pull
-  requests with `aptwarden defs validate`.
+**Trust model (public repository).**
+
+- **Signed release tags, not branches.** Anyone may commit to `main`.
+  aptwarden only activates the newest tag `vYYYY.MM.DD[.N]` that
+  1. carries a valid SSH signature by a key in the local `allowed_signers` file
+     (never taken from the repository),
+  2. descends from the last accepted commit (no rollback, no rewritten history),
+  3. validates completely (all or nothing).
+
+  Newer tags failing a check are rejected once with an alert, older valid tags
+  are still considered, and the accepted state stays active otherwise. Tags are
+  immutable: a moved tag is refused at fetch.
+- **The signature covers the whole tree.** The maintainer signs after reviewing
+  the diff since the last release, so pull requests can be merged in the web UI
+  without weakening the model.
+- **Files are read from the verified commit** (`git archive`), not from a
+  working tree. Git runs with system and global config disabled.
+- **The accepted definitions are stored in `state.db`,** so wiping the cache or a
+  broken upstream cannot remove or roll them back.
+- **Definitions only tighten local policy.** `auto-patch` takes effect only if the
+  host policy already allows auto-patching for that severity (phase 4).
+- **Definitions are data only:** no package sources, commands or scripts.
+
+**`block`** marks versions as known-bad (think xz 5.6.x):
+
+- installed blocked versions always raise an alert, whatever their severity,
+- phase 4 never installs them,
+- optionally pins them away per host (`enforce_block: pin`).
 
 ## Storage
 
@@ -234,7 +254,8 @@ from systemd credentials (`*_file` keys) and never stored inline. On the target 
 1. Inventory, Debian tracker + OSV matching, CVSS/KEV enrichment, report and status (text
    and JSON), state database, JSON logs, systemd timer.
 2. Notifications (email, ntfy, Slack-compatible, generic webhook), alert de-duplication.
-3. Definitions repository: schema, sync, signature verification, precedence, block logic.
+3. Definitions repository: schema, signed-tag sync, rollback protection, precedence,
+   block alerts.
 4. Patching: helper, simulation parser, Proxmox snapshot provider, healthchecks,
    needrestart/reboot, rollback, cleanup, maintenance windows, integration tests.
 5. Later: Trivy plugin for Docker images, small status web page.

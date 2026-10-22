@@ -39,6 +39,16 @@ DEFAULTS: dict = {
             "max_age": "3d",
         },
         "osv": {"enabled": True, "url": "https://api.osv.dev", "workers": 8},
+        "custom": {
+            "enabled": False,
+            "url": "https://github.com/ramhee98/aptwarden-definitions.git",
+            "ref": "signed-tags",
+            "branch": "main",
+            "tag_pattern": r"^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$",
+            "allowed_signers_file": "/etc/aptwarden/allowed_signers",
+            "path": "definitions",
+            "refresh_interval": "1h",
+        },
     },
     "enrich": {
         "cvss": {

@@ -85,6 +85,46 @@
               "maximum": 32
             }
           }
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ref": {
+              "description": "signed-tags: newest signed tag (default). branch: follow a branch without verification",
+              "enum": [
+                "signed-tags",
+                "branch"
+              ]
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag_pattern": {
+              "type": "string",
+              "minLength": 1
+            },
+            "allowed_signers_file": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "refresh_interval": {
+              "$ref": "#/$defs/duration"
+            }
+          }
         }
       }
     },

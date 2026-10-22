@@ -62,6 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     cc = csub.add_parser("check", help="validate the configuration")
     cc.add_argument("--dump", action="store_true", help="print the effective configuration")
 
+    p = sub.add_parser("defs", help="custom vulnerability definitions")
+    dsub = p.add_subparsers(dest="defs_command", metavar="SUBCOMMAND", required=True)
+    dv = dsub.add_parser("validate", help="validate a definitions directory (no config needed)")
+    dv.add_argument("path", help="directory with definition files, e.g. definitions/")
+    dsync = dsub.add_parser("sync", help="fetch, verify and activate definitions now")
+    dsync.add_argument("--force", action="store_true", help="ignore refresh_interval")
+    dsub.add_parser("list", help="show the active definitions")
+
     p = sub.add_parser("notify", help="notifications")
     nsub = p.add_subparsers(dest="notify_command", metavar="SUBCOMMAND", required=True)
     nsub.add_parser("test", help="send a test message through every configured notifier")
@@ -209,6 +217,75 @@ def cmd_notify_test(args, cfg: config.Config) -> int:
     return EXIT_PROBLEM if errors else EXIT_OK
 
 
+def cmd_defs_validate(args) -> int:
+    from pathlib import Path
+
+    from aptwarden.definitions import load_dir
+
+    path = Path(args.path)
+    if not path.is_dir():
+        print(f"aptwarden: {path} is not a directory", file=sys.stderr)
+        return EXIT_USAGE
+    result = load_dir(path)
+    for w in result.warnings:
+        print(f"warning: {w}")
+    for e in result.errors:
+        print(f"error: {e}")
+    print(f"{len(result.definitions)} valid definitions, {len(result.errors)} errors")
+    return EXIT_OK if result.ok else EXIT_PROBLEM
+
+
+def _custom_source(cfg: config.Config, offline: bool = False):
+    from aptwarden.cache import Cache
+    from aptwarden.http import HttpClient
+    from aptwarden.sources.custom import CustomSource
+    from aptwarden.state import State
+
+    state = State(cfg.state_dir / "state.db")
+    cache = Cache(cfg.cache_dir / "cache.db")
+    source = CustomSource(cfg.sources["custom"], cache, HttpClient(), offline, state=state,
+                          base_dir=cfg.base_dir)
+    return source, (state, cache)
+
+
+def cmd_defs_sync(args, cfg: config.Config) -> int:
+    if not cfg.sources["custom"]["enabled"]:
+        print("custom definitions are disabled (sources.custom.enabled)", file=sys.stderr)
+        return EXIT_USAGE
+    source, handles = _custom_source(cfg)
+    try:
+        status = source.refresh(force=args.force)
+    finally:
+        for h in handles:
+            h.close()
+    print(f"definitions: {status.message}")
+    for w in status.warnings:
+        print(f"warning: {w}")
+    for a in status.alerts:
+        print(f"PROBLEM: {a}")
+    return EXIT_PROBLEM if status.alerts or any("sync failed" in w for w in status.warnings) \
+        else EXIT_OK
+
+
+def cmd_defs_list(args, cfg: config.Config) -> int:
+    source, handles = _custom_source(cfg, offline=True)
+    try:
+        status = source.refresh()
+        defs = source.definitions()
+    finally:
+        for h in handles:
+            h.close()
+    print(f"definitions: {status.message}")
+    if defs:
+        rows = [["ID", "PACKAGE", "SEVERITY", "ACTION", "RELEASES", "ALIASES", "SUMMARY"]]
+        for d in sorted(defs, key=lambda d: d.id):
+            rows.append([d.id + (" (expired)" if d.expired() else ""), d.package, d.severity,
+                         d.action, ",".join(d.affected), ",".join(d.aliases) or "-",
+                         report.truncate(d.summary, 50)])
+        print("\n".join(report.format_table(rows, indent="")))
+    return EXIT_OK
+
+
 def cmd_config_check(args, cfg: config.Config) -> int:
     if args.dump:
         print(json.dumps(cfg.raw, indent=2))
@@ -226,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "version":
         print(f"aptwarden {__version__}")
         return EXIT_OK
+    if args.command == "defs" and args.defs_command == "validate":
+        return cmd_defs_validate(args)
     try:
         cfg = config.load(args.config)
     except config.ConfigError as e:
@@ -242,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         ("sources", "refresh"): cmd_sources_refresh,
         ("config", "check"): cmd_config_check,
         ("notify", "test"): cmd_notify_test,
+        ("defs", "sync"): cmd_defs_sync,
+        ("defs", "list"): cmd_defs_list,
     }
     sub = getattr(args, f"{args.command}_command", None)
     handler = handlers[(args.command, sub) if sub else args.command]

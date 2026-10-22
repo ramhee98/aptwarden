@@ -8,10 +8,10 @@ Tracker and OSV.dev. It scores the findings with CVSS and CISA KEV and reports w
 be fixed right now. No agent runs on the target hosts, and reporting needs no root
 privileges there.
 
-> **Status:** Phases 1 and 2 are done: inventory, vulnerability matching, report,
-> status and e-mail notifications. Next come custom vulnerability definitions from a
-> Git repository, and patching behind a staged safety net (simulation, Proxmox
-> snapshot, healthcheck, rollback). See [docs/architecture.md](docs/architecture.md).
+> **Status:** Phases 1 to 3 are done: inventory, vulnerability matching, report,
+> status, e-mail notifications and custom definitions from a signed Git repository.
+> Next comes patching behind a staged safety net (simulation, Proxmox snapshot,
+> healthcheck, rollback). See [docs/architecture.md](docs/architecture.md).
 
 ## How it works
 
@@ -135,6 +135,40 @@ hosts:
 - **Secrets** are always referenced as files (`*_file`), never inline. A relative path is
   first looked up in systemd's `$CREDENTIALS_DIRECTORY` (`LoadCredential=`).
 
+### Custom definitions
+
+Your own vulnerability definitions come from a Git repository, by default
+[aptwarden-definitions](https://github.com/ramhee98/aptwarden-definitions). There
+you'll find the format, the actions (`report`, `auto-patch`, `block`) and the release
+process. aptwarden activates only signed release tags that descend from the last
+accepted one:
+
+```sh
+# trust the maintainer key(s); format: <principal> <key>
+echo "32970397+ramhee98@users.noreply.github.com ssh-ed25519 AAAA..." \
+    > /etc/aptwarden/allowed_signers
+```
+
+```yaml
+sources:
+  custom:
+    enabled: true
+    url: https://github.com/ramhee98/aptwarden-definitions.git
+    allowed_signers_file: /etc/aptwarden/allowed_signers
+```
+
+```sh
+aptwarden defs sync          # fetch, verify and activate now (otherwise once per refresh_interval)
+aptwarden defs list          # the active definitions
+aptwarden defs validate DIR  # check a definitions directory, no config needed (CI)
+```
+
+- **Precedence:** a definition wins over the Debian tracker and OSV for the CVEs it
+  lists, including "not affected".
+- **`block`:** an installed blocked version always raises an alert.
+- **Rejected releases:** a rejected tag (unsigned, foreign key, rollback, invalid
+  content) raises one alert, and the previous release stays active.
+
 ### NVD API key
 
 CVSS vectors come from OSV. For CVEs that OSV only has with a CVSS v4 vector, or not at
@@ -195,6 +229,7 @@ aptwarden hosts check                  connectivity and inventory test
 aptwarden sources refresh [--force]    update the cached feeds
 aptwarden config check [--dump]        validate (and print) the configuration
 aptwarden notify test                  send a test notification
+aptwarden defs sync | list | validate  custom definitions
 ```
 
 Example (shortened):

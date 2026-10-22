@@ -42,6 +42,8 @@ class FindingStatus(StrEnum):
     FIX_PENDING = "fix-pending"  # fixed in Debian, not yet published (e.g. next point release)
     NO_FIX = "no-fix"  # vulnerable, no fix in this release
     UNDETERMINED = "undetermined"  # Debian has not determined whether the release is affected
+    # Only produced by custom definitions to overrule other sources; never stored.
+    NOT_AFFECTED = "not-affected"
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,8 @@ class Finding:
     cvss_vector: str | None = None
     kev: bool = False
     first_seen: str | None = None
+    definition: str | None = None  # id of the custom definition that decided this finding
+    action: str | None = None  # the definition's action: report | auto-patch | block
 
     @property
     def key(self) -> tuple[str, str, str]:

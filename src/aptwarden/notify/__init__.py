@@ -77,7 +77,8 @@ def alert_candidates(findings: list[Finding], alert_cfg: dict) -> list[Finding]:
     return [
         f for f in findings
         if f.status != FindingStatus.UNDETERMINED
-        and (f.severity >= min_severity or (alert_cfg.get("kev", True) and f.kev))
+        and (f.severity >= min_severity or (alert_cfg.get("kev", True) and f.kev)
+             or f.action == "block")  # a known-bad version is installed
     ]
 
 
@@ -92,7 +93,8 @@ def _fix_text(f: Finding) -> str:
 def _finding_lines(f: Finding, detail: bool) -> list[str]:
     score = f" {f.cvss_score:.1f}" if f.cvss_score is not None else ""
     kev = "  KEV" if f.kev else ""
-    lines = [f"  {f.vuln_id}  {f.severity}{score}{kev}  {f.source_package} "
+    definition = f"  [{f.definition} {f.action}]" if f.definition else ""
+    lines = [f"  {f.vuln_id}  {f.severity}{score}{kev}{definition}  {f.source_package} "
              f"{f.installed_version}: {_fix_text(f)}"]
     if detail:
         if f.description:
@@ -109,10 +111,16 @@ def _sorted(findings: list[Finding]) -> list[Finding]:
 def compose_alert(prefix: str, run: RunReport, alerts: dict[str, list[Finding]],
                   failed: list[HostRecord]) -> Message | None:
     no_data = not run.data_available
-    if not (alerts or failed or no_data):
+    source_alerts = [(s.name, a) for s in run.sources for a in s.alerts]
+    if not (alerts or failed or no_data or source_alerts):
         return None
     parts = []
     lines = [f"aptwarden alert · run {run.run_id} · {run.started_at}", ""]
+    if source_alerts:
+        parts.append("source problems")
+        lines.append("Problems with vulnerability sources:")
+        lines += [f"  {name}: {a}" for name, a in source_alerts]
+        lines.append("")
     if no_data:
         parts.append("no vulnerability data")
         lines += ["NO VULNERABILITY DATA: every source failed, hosts could not be checked."]
@@ -126,8 +134,9 @@ def compose_alert(prefix: str, run: RunReport, alerts: dict[str, list[Finding]],
         lines.append("")
     if alerts:
         total = sum(len(v) for v in alerts.values())
-        parts.append(f"{total} critical/KEV vulnerabilities on {', '.join(sorted(alerts))}")
-        lines += ["Critical or known-exploited vulnerabilities (new, or reminder):", ""]
+        parts.append(f"{total} critical/KEV/blocked vulnerabilities on "
+                     f"{', '.join(sorted(alerts))}")
+        lines += ["Critical, known-exploited or blocked vulnerabilities (new, or reminder):", ""]
         for host in sorted(alerts):
             rec = next(h for h in run.hosts if h.host == host)
             lines.append(f"{host} ({rec.address})")

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ramhee98/aptwarden/schemas/definition-v1.schema.json",
+  "title": "aptwarden vulnerability definition, version 1",
+  "description": "One vulnerability of one Debian source package. Versions use Debian semantics (epoch:upstream-revision).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "summary", "severity", "package", "affected", "action"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {
+      "description": "Unique id, also the file name without .yaml",
+      "type": "string",
+      "pattern": "^AW-[0-9]{4}-[0-9]{4,}$"
+    },
+    "aliases": {
+      "description": "CVE or Debian TEMP ids this definition covers; it overrides other sources for them",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|TEMP-[0-9]{7}-[0-9A-F]{6})$"}
+    },
+    "summary": {"type": "string", "minLength": 5, "maxLength": 200},
+    "details": {"type": "string", "maxLength": 5000},
+    "severity": {"enum": ["critical", "high", "medium", "low"]},
+    "package": {
+      "description": "Debian source package name",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9+.-]+$"
+    },
+    "affected": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["release", "ranges"],
+        "properties": {
+          "release": {
+            "description": "Debian codename (bookworm, trixie, ...) or \"any\"",
+            "type": "string",
+            "pattern": "^([a-z]+|any)$"
+          },
+          "ranges": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["introduced"],
+              "properties": {
+                "introduced": {"description": "First affected version, \"0\" for all", "type": "string", "minLength": 1},
+                "fixed": {"description": "First fixed version (exclusive end)", "type": "string", "minLength": 1},
+                "last_affected": {"description": "Last affected version (inclusive end)", "type": "string", "minLength": 1}
+              },
+              "not": {"required": ["fixed", "last_affected"]}
+            }
+          }
+        }
+      }
+    },
+    "action": {
+      "description": "report: inform only. auto-patch: may be patched automatically where the host policy allows it. block: the affected versions are known-bad and must never be installed",
+      "enum": ["report", "auto-patch", "block"]
+    },
+    "references": {"type": "array", "items": {"type": "string", "pattern": "^https://"}},
+    "published": {"type": "string", "format": "date"},
+    "expires": {"description": "Ignore the definition after this date", "type": "string", "format": "date"}
+  }
+}

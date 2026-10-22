@@ -19,7 +19,7 @@ from aptwarden.http import HttpClient
 from aptwarden.matcher import merge
 from aptwarden.models import Finding, HostInventory
 from aptwarden.notify import Dispatcher, HostChanges, Notifier
-from aptwarden.sources import Source, SourceStatus, build_sources
+from aptwarden.sources import CORE_SOURCES, Source, SourceStatus, build_sources
 from aptwarden.state import HostRecord, State, utcnow
 from aptwarden.transport import TransportFactory
 
@@ -44,7 +44,7 @@ class RunReport:
 
     @property
     def data_available(self) -> bool:
-        return any(s.ok for s in self.sources if s.name != "kev")
+        return any(s.ok for s in self.sources if s.name in CORE_SOURCES)
 
 
 def host_notes(inv: HostInventory) -> list[str]:
@@ -67,7 +67,8 @@ class Runner:
         self._transports = transports
         self.cache = Cache(cfg.cache_dir / "cache.db")
         self.state = State(cfg.state_dir / "state.db")
-        self.sources: list[Source] = build_sources(cfg.sources, self.cache, self.http, offline)
+        self.sources: list[Source] = build_sources(cfg.sources, self.cache, self.http, offline,
+                                                   state=self.state, base_dir=cfg.base_dir)
         cvss_cfg = cfg.enrich["cvss"]
         self.cvss = (CvssLookup(cvss_cfg, self.cache, self.http, offline, cfg.base_dir)
                      if cvss_cfg.get("enabled", True) else None)

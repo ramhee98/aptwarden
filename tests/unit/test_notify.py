@@ -18,7 +18,7 @@ from aptwarden.notify import email as email_mod
 from aptwarden.notify.email import EmailNotifier
 from aptwarden.runner import RunReport
 from aptwarden.sources import SourceStatus
-from aptwarden.state import HostRecord, State
+from aptwarden.state import SCHEMA_VERSION, HostRecord, State
 
 EMAIL = {"enabled": True, "host": "192.0.2.25", "port": 25, "security": "starttls",
          "tls_verify": True, "tls_server_name": "mx.example.org", "username": None,
@@ -192,7 +192,7 @@ def test_alert_once_then_reminder(dispatcher):
     host = ok_host("web01", [f("CVE-1", Severity.CRITICAL), f("CVE-2", Severity.HIGH)])
     assert d.dispatch(run_with([host])) == []
     [alert] = [m for m in notifier.sent if m.kind == "alert"]
-    assert "1 critical/KEV vulnerabilities on web01" in alert.subject
+    assert "1 critical/KEV/blocked vulnerabilities on web01" in alert.subject
     assert "CVE-1" in alert.body and "CVE-2" not in alert.body
     assert "security-tracker.debian.org/tracker/CVE-1" in alert.body
 
@@ -287,7 +287,7 @@ def test_state_migration_from_v1(tmp_path):
     db.commit()
     db.close()
     state = State(path)
-    assert state.db.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert state.db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert state.alert_due("web01", [f("CVE-1")], 0) != []
     state.mark_alerted("web01", [f("CVE-1")])
     assert state.alert_due("web01", [f("CVE-1")], 0) == []

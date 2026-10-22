@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 from aptwarden import debversion
 from aptwarden.models import Finding, FindingStatus, Severity
-from aptwarden.sources import SourceStatus
+from aptwarden.sources import CORE_SOURCES, SourceStatus
 from aptwarden.state import HostRecord
 
 _SEVERITIES = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.UNKNOWN]
@@ -85,6 +85,8 @@ def _top_label(f: Finding) -> str:
         parts.append(f"{f.cvss_score:.1f}")
     if f.kev:
         parts.append("KEV")
+    if f.definition:
+        parts.append(f"[{f.definition} {f.action}]")
     return " ".join(parts)
 
 
@@ -162,8 +164,9 @@ def _group_table(groups: list[PackageGroup], last_header: str, show_cves: bool,
         for f in g.findings:
             score = f"{f.cvss_score:.1f}" if f.cvss_score is not None else "-"
             flag = " KEV" if f.kev else "    "
+            definition = f"[{f.definition} {f.action}] " if f.definition else ""
             out.append(f"      {f.vuln_id:<18} {str(f.severity):<8} {score:>4}{flag}  "
-                       f"{truncate(f.description, 90)}")
+                       f"{definition}{truncate(f.description, 90)}")
     return out
 
 
@@ -180,7 +183,7 @@ def render_text(hosts: list[HostRecord], sources: list[SourceStatus], *,
             detail = (detail + "; " if detail else "") + s.message
         lines.append(f"source {s.name}: {state}" + (f" ({detail})" if detail else ""))
         lines += [f"  ! {w}" for w in s.warnings]
-    if sources and not any(s.ok for s in sources if s.name != "kev"):
+    if sources and not any(s.ok for s in sources if s.name in CORE_SOURCES):
         lines.append("!! NO VULNERABILITY DATA AVAILABLE: results below are NOT a clean bill "
                      "of health")
     lines += [f"note: {n}" for n in notes or []]

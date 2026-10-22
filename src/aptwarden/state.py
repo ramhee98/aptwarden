@@ -10,7 +10,7 @@ from pathlib import Path
 
 from aptwarden.models import Finding
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS seen (
     PRIMARY KEY (host, source_package, vuln_id)
 );
 CREATE INDEX IF NOT EXISTS host_results_host ON host_results (host, scanned_at);
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -187,6 +191,19 @@ class State:
             )
         ]
         return rec
+
+    def get(self, key: str, default=None):
+        row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
+
+    def set(self, **values) -> None:
+        """Store JSON values atomically, keys with "." passed as ``**{"a.b": v}``."""
+        with self.db:
+            self.db.executemany(
+                "INSERT INTO kv VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [(k, json.dumps(v)) for k, v in values.items()],
+            )
 
     def run_info(self, run_id: str) -> dict | None:
         row = self.db.execute(

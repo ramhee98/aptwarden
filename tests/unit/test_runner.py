@@ -184,3 +184,15 @@ def test_failed_notification_makes_run_partial(setup):
     assert run.status == "partial"
     assert any("relay down" in n for n in run.notes)
     runner.close()
+
+
+def test_cli_defs_validate_needs_no_config(tmp_path, capsys, monkeypatch):
+    from tests.unit.test_definitions import VALID
+
+    monkeypatch.setenv("APTWARDEN_CONFIG", str(tmp_path / "does-not-exist.yaml"))
+    (tmp_path / "defs").mkdir()
+    (tmp_path / "defs" / "AW-2026-0001.yaml").write_text(VALID)
+    assert cli.main(["defs", "validate", str(tmp_path / "defs")]) == 0
+    assert "1 valid definitions, 0 errors" in capsys.readouterr().out
+    (tmp_path / "defs" / "AW-2026-0002.yaml").write_text(VALID)  # id/file name mismatch
+    assert cli.main(["defs", "validate", str(tmp_path / "defs")]) == 1
