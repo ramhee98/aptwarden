@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ramhee98/aptwarden/schemas/config.schema.json",
+  "title": "aptwarden configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hosts"],
+  "properties": {
+    "state_dir": {"type": "string"},
+    "cache_dir": {"type": "string"},
+    "max_parallel": {"type": "integer", "minimum": 1, "maximum": 64},
+    "keep_runs": {"type": "integer", "minimum": 1},
+    "log": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {"enum": ["debug", "info", "warning", "error"]},
+        "format": {"enum": ["auto", "json", "text"]}
+      }
+    },
+    "ssh": {"$ref": "#/$defs/ssh"},
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "debian_tracker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "url": {"type": "string"},
+            "refresh_interval": {"$ref": "#/$defs/duration"},
+            "max_age": {"$ref": "#/$defs/duration"}
+          }
+        },
+        "osv": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "url": {"type": "string"},
+            "workers": {"type": "integer", "minimum": 1, "maximum": 32}
+          }
+        }
+      }
+    },
+    "enrich": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cvss": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "osv_url": {"type": "string"},
+            "workers": {"type": "integer", "minimum": 1, "maximum": 32},
+            "cache_ttl": {"$ref": "#/$defs/duration"},
+            "negative_ttl": {"$ref": "#/$defs/duration"},
+            "nvd": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "url": {"type": "string"},
+                "api_key_file": {"type": ["string", "null"]},
+                "budget": {"$ref": "#/$defs/duration"}
+              }
+            }
+          }
+        },
+        "kev": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "url": {"type": "string"},
+            "refresh_interval": {"$ref": "#/$defs/duration"}
+          }
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_severity": {"$ref": "#/$defs/severity"},
+        "show": {"enum": ["fixable", "all"]}
+      }
+    },
+    "hosts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/host"}
+    }
+  },
+  "$defs": {
+    "duration": {
+      "description": "Seconds as integer, or a number with unit s, m, h or d (e.g. 90s, 30m, 1h, 3d)",
+      "oneOf": [
+        {"type": "integer", "minimum": 0},
+        {"type": "string", "pattern": "^[0-9]+[smhd]$"}
+      ]
+    },
+    "severity": {"enum": ["unknown", "low", "medium", "high", "critical"]},
+    "ssh": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user": {"type": "string", "minLength": 1},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "identity_file": {"type": ["string", "null"]},
+        "known_hosts_file": {"type": ["string", "null"]},
+        "strict_host_key_checking": {"enum": ["yes", "accept-new"]},
+        "connect_timeout": {"type": "integer", "minimum": 1},
+        "command_timeout": {"type": "integer", "minimum": 1},
+        "options": {
+          "description": "Extra ssh -o options",
+          "type": "object",
+          "additionalProperties": {"type": ["string", "integer"]}
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+        "address": {"type": "string", "minLength": 1},
+        "transport": {"enum": ["ssh", "local"]},
+        "ssh": {"$ref": "#/$defs/ssh"},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

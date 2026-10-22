@@ -1,0 +1,251 @@
+"""Configuration loading: YAML, defaults, JSON schema validation, typed access."""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+from dataclasses import dataclass, field
+from importlib import resources
+from pathlib import Path
+
+import jsonschema
+import yaml
+
+DEFAULT_PATH = "/etc/aptwarden/config.yaml"
+
+DEFAULTS: dict = {
+    "state_dir": "/var/lib/aptwarden",
+    "cache_dir": "/var/cache/aptwarden",
+    "max_parallel": 4,
+    "keep_runs": 100,
+    "log": {"level": "info", "format": "auto"},
+    "ssh": {
+        "user": "aptwarden",
+        "port": 22,
+        "identity_file": None,
+        "known_hosts_file": None,
+        "strict_host_key_checking": "yes",
+        "connect_timeout": 10,
+        "command_timeout": 300,
+        "options": {},
+    },
+    "sources": {
+        "debian_tracker": {
+            "enabled": True,
+            "url": "https://security-tracker.debian.org/tracker/data/json",
+            "refresh_interval": "1h",
+            "max_age": "3d",
+        },
+        "osv": {"enabled": True, "url": "https://api.osv.dev", "workers": 8},
+    },
+    "enrich": {
+        "cvss": {
+            "enabled": True,
+            "osv_url": "https://api.osv.dev",
+            "workers": 8,
+            "cache_ttl": "30d",
+            "negative_ttl": "7d",
+            "nvd": {
+                "enabled": True,
+                "url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+                "api_key_file": None,
+                "budget": "1m",
+            },
+        },
+        "kev": {
+            "enabled": True,
+            "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+            "refresh_interval": "24h",
+        },
+    },
+    "report": {"min_severity": "high", "show": "fixable"},
+    "hosts": [],
+}
+
+_DURATION_RE = re.compile(r"^([0-9]+)([smhd])$")
+_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+class ConfigError(Exception):
+    pass
+
+
+def parse_duration(value: int | str) -> int:
+    """Return seconds for 90, "90s", "30m", "1h" or "3d"."""
+    if isinstance(value, int):
+        return value
+    m = _DURATION_RE.match(value)
+    if not m:
+        raise ConfigError(f"invalid duration {value!r}")
+    return int(m.group(1)) * _UNITS[m.group(2)]
+
+
+def read_secret(path: str, base: Path | None = None) -> str:
+    """Read a secret from a file. Relative paths are looked up in systemd's
+    $CREDENTIALS_DIRECTORY first (LoadCredential=), then relative to ``base``."""
+    p = Path(path)
+    if not p.is_absolute():
+        cred_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+        if cred_dir and (Path(cred_dir) / p).exists():
+            p = Path(cred_dir) / p
+        elif base is not None:
+            p = base / p
+    try:
+        return p.read_text().strip()
+    except OSError as e:
+        raise ConfigError(f"cannot read secret {path}: {e.strerror}") from e
+
+
+@dataclass
+class SshSettings:
+    user: str
+    port: int
+    identity_file: str | None
+    known_hosts_file: str | None
+    strict_host_key_checking: str
+    connect_timeout: int
+    command_timeout: int
+    options: dict = field(default_factory=dict)
+
+
+@dataclass
+class HostConfig:
+    name: str
+    address: str
+    transport: str
+    ssh: SshSettings
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Config:
+    path: Path | None
+    raw: dict
+    hosts: list[HostConfig]
+
+    @property
+    def base_dir(self) -> Path:
+        return self.path.parent if self.path else Path.cwd()
+
+    @property
+    def state_dir(self) -> Path:
+        return Path(self.raw["state_dir"])
+
+    @property
+    def cache_dir(self) -> Path:
+        return Path(self.raw["cache_dir"])
+
+    @property
+    def max_parallel(self) -> int:
+        return self.raw["max_parallel"]
+
+    @property
+    def keep_runs(self) -> int:
+        return self.raw["keep_runs"]
+
+    @property
+    def log(self) -> dict:
+        return self.raw["log"]
+
+    @property
+    def sources(self) -> dict:
+        return self.raw["sources"]
+
+    @property
+    def enrich(self) -> dict:
+        return self.raw["enrich"]
+
+    @property
+    def report(self) -> dict:
+        return self.raw["report"]
+
+    def select_hosts(self, names: list[str] | None) -> list[HostConfig]:
+        if not names:
+            return list(self.hosts)
+        by_name = {h.name: h for h in self.hosts}
+        unknown = [n for n in names if n not in by_name]
+        if unknown:
+            raise ConfigError(f"unknown host(s): {', '.join(unknown)}")
+        return [by_name[n] for n in names]
+
+
+def _schema() -> dict:
+    text = resources.files("aptwarden").joinpath("schemas/config.schema.json").read_text()
+    return json.loads(text)
+
+
+def deep_merge(base: dict, override: dict) -> dict:
+    result = copy.deepcopy(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = deep_merge(result[k], v)
+        else:
+            result[k] = copy.deepcopy(v)
+    return result
+
+
+def _resolve(path: str | None, base: Path) -> str | None:
+    if path is None:
+        return None
+    p = Path(path).expanduser()
+    return str(p if p.is_absolute() else base / p)
+
+
+def from_dict(data: dict, path: Path | None = None) -> Config:
+    if not isinstance(data, dict):
+        raise ConfigError("configuration must be a mapping")
+    merged = deep_merge(DEFAULTS, data)
+    validator = jsonschema.Draft202012Validator(_schema())
+    errors = sorted(validator.iter_errors(merged), key=lambda e: list(e.absolute_path))
+    if errors:
+        lines = [f"  {'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
+                 for e in errors]
+        raise ConfigError("invalid configuration:\n" + "\n".join(lines))
+
+    base = path.parent if path else Path.cwd()
+    for section in ("state_dir", "cache_dir"):
+        merged[section] = _resolve(merged[section], base)
+    # Validate every duration early so typos fail at load time, not mid-run.
+    for section in (merged["sources"], merged["enrich"]):
+        _check_durations(section)
+
+    hosts: list[HostConfig] = []
+    seen: set[str] = set()
+    for h in merged["hosts"]:
+        if h["name"] in seen:
+            raise ConfigError(f"duplicate host name {h['name']!r}")
+        seen.add(h["name"])
+        ssh = deep_merge(merged["ssh"], h.get("ssh", {}))
+        ssh["identity_file"] = _resolve(ssh["identity_file"], base)
+        ssh["known_hosts_file"] = _resolve(ssh["known_hosts_file"], base)
+        hosts.append(
+            HostConfig(
+                name=h["name"],
+                address=h.get("address", h["name"]),
+                transport=h.get("transport", "ssh"),
+                ssh=SshSettings(**ssh),
+                tags=h.get("tags", []),
+            )
+        )
+    return Config(path=path, raw=merged, hosts=hosts)
+
+
+def _check_durations(section: dict) -> None:
+    for key, value in section.items():
+        if isinstance(value, dict):
+            _check_durations(value)
+        elif key in ("refresh_interval", "max_age", "cache_ttl", "negative_ttl", "budget"):
+            parse_duration(value)
+
+
+def load(path: str | os.PathLike | None = None) -> Config:
+    p = Path(path or os.environ.get("APTWARDEN_CONFIG") or DEFAULT_PATH)
+    try:
+        data = yaml.safe_load(p.read_text())
+    except OSError as e:
+        raise ConfigError(f"cannot read {p}: {e.strerror}") from e
+    except yaml.YAMLError as e:
+        raise ConfigError(f"cannot parse {p}: {e}") from e
+    return from_dict(data or {}, p.resolve())

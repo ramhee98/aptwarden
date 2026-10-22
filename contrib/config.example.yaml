@@ -1,0 +1,54 @@
+# aptwarden configuration, usually /etc/aptwarden/config.yaml
+# Every key is optional except `hosts`; the values shown are the defaults.
+
+state_dir: /var/lib/aptwarden      # run history (state.db)
+cache_dir: /var/cache/aptwarden    # feed cache (cache.db), safe to delete
+max_parallel: 4                    # hosts inventoried in parallel
+keep_runs: 100                     # runs kept in state.db
+
+log:
+  level: info                      # debug | info | warning | error
+  format: auto                     # auto (text on a terminal, JSON otherwise) | json | text
+
+ssh:                               # defaults for all hosts, overridable per host
+  user: aptwarden
+  port: 22
+  identity_file: /etc/aptwarden/ssh/id_ed25519
+  known_hosts_file: /var/lib/aptwarden/known_hosts
+  strict_host_key_checking: "yes"  # "yes" or "accept-new" (trust on first use)
+  connect_timeout: 10
+  command_timeout: 300
+  options: {}                      # extra ssh -o options, e.g. {ProxyJump: bastion}
+
+sources:
+  debian_tracker:
+    enabled: true
+    refresh_interval: 1h           # minimum time between feed checks
+    max_age: 3d                    # warn if the feed could not be verified for this long
+  osv:
+    enabled: true
+
+enrich:
+  cvss:
+    enabled: true
+    nvd:
+      enabled: true
+      api_key_file: null           # e.g. nvd-api-key (free key: https://nvd.nist.gov/developers)
+      budget: 1m                   # time spent on rate-limited NVD lookups per run
+  kev:
+    enabled: true
+    refresh_interval: 24h
+
+report:
+  min_severity: high               # text report hides fixable packages below this
+                                   # (KEV and unscored packages are always shown)
+  show: fixable                    # fixable | all
+
+hosts:
+  - name: proxy01
+    address: 192.0.2.10
+  - name: mail01
+    address: mail01.example.org
+    ssh: {port: 2222}
+  - name: aptwarden                # the central host itself
+    transport: local
