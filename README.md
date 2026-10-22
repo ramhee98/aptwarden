@@ -57,11 +57,13 @@ useradd --system --home-dir /var/lib/aptwarden --shell /usr/sbin/nologin aptward
 
 python3 -m venv --system-site-packages /opt/aptwarden
 /opt/aptwarden/bin/pip install --no-deps git+https://github.com/ramhee98/aptwarden
+# or from a wheel built with `pip wheel --no-deps -w dist .`
 ln -s /opt/aptwarden/bin/aptwarden /usr/local/bin/aptwarden
 
 install -d -m 755 /etc/aptwarden
-install -d -m 700 -o aptwarden -g aptwarden /etc/aptwarden/ssh /var/lib/aptwarden
-sudo -u aptwarden ssh-keygen -t ed25519 -N '' -C "aptwarden@$(hostname)" \
+install -d -m 700 -o aptwarden -g aptwarden /etc/aptwarden/ssh /var/lib/aptwarden \
+    /var/cache/aptwarden
+runuser -u aptwarden -- ssh-keygen -t ed25519 -N '' -C "aptwarden@$(hostname)" \
     -f /etc/aptwarden/ssh/id_ed25519
 
 cp contrib/config.example.yaml /etc/aptwarden/config.yaml   # then edit hosts
@@ -92,7 +94,7 @@ Before the first run, check the hosts' key fingerprints. There are two ways to f
   back to `yes`.
 
 ```sh
-sudo -u aptwarden aptwarden hosts check
+runuser -u aptwarden -- aptwarden hosts check
 ```
 
 ### Timer
@@ -101,7 +103,7 @@ sudo -u aptwarden aptwarden hosts check
 cp contrib/systemd/aptwarden-report.{service,timer} /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now aptwarden-report.timer
-journalctl -u aptwarden-report.service      # JSON log lines
+journalctl -u aptwarden-report.service      # report plus JSON log lines
 ```
 
 - **Exit code:** the service exits with 1 when a host or feed failed, so failures show

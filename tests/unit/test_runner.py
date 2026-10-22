@@ -121,3 +121,12 @@ def test_cli_report_status_and_exit_codes(setup, tmp_path, monkeypatch, capsys):
 
     assert cli.main(["-c", str(tmp_path / "missing.yaml"), "status"]) == 2
     assert cli.main(["version"]) == 0
+
+
+def test_cli_reports_unwritable_directories_cleanly(tmp_path, capsys):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"cache_dir: {blocker}/cache\nhosts: [{{name: web01}}]\n")
+    assert cli.main(["-c", str(config_file), "-q", "hosts", "check"]) == 1
+    assert "aptwarden:" in capsys.readouterr().err

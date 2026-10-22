@@ -8,7 +8,7 @@ After=network-online.target
 Type=oneshot
 User=aptwarden
 Group=aptwarden
-ExecStart=/usr/local/bin/aptwarden --quiet report
+ExecStart=/usr/local/bin/aptwarden report
 # Exit code 1 means some hosts or sources failed: the unit is marked failed so
 # it shows up in `systemctl --failed` and monitoring.
 

@@ -216,5 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     except config.ConfigError as e:
         print(f"aptwarden: {e}", file=sys.stderr)
         return EXIT_USAGE
+    except OSError as e:  # e.g. state or cache directory not writable
+        print(f"aptwarden: {e}", file=sys.stderr)
+        return EXIT_PROBLEM
     except KeyboardInterrupt:
         return 130
