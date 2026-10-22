@@ -88,7 +88,7 @@ def _top_label(f: Finding) -> str:
     return " ".join(parts)
 
 
-def _truncate(text: str, width: int) -> str:
+def truncate(text: str, width: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= width else text[: width - 1] + "…"
 
@@ -163,7 +163,7 @@ def _group_table(groups: list[PackageGroup], last_header: str, show_cves: bool,
             score = f"{f.cvss_score:.1f}" if f.cvss_score is not None else "-"
             flag = " KEV" if f.kev else "    "
             out.append(f"      {f.vuln_id:<18} {str(f.severity):<8} {score:>4}{flag}  "
-                       f"{_truncate(f.description, 90)}")
+                       f"{truncate(f.description, 90)}")
     return out
 
 

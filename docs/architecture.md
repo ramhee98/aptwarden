@@ -37,7 +37,8 @@ healthcheck and rollback.
 | `state` | SQLite: runs, per-host results, findings, first-seen tracking |
 | `report` | Text and JSON output |
 | `cli` | `report`, `status`, `hosts check`, `sources refresh`, `config check` |
-| later: `policy`, `patch`, `snapshot`, `health`, `notify`, `definitions` | see phases 2 to 4 |
+| `notify` | Run summary and de-duplicated immediate alerts; e-mail notifier, webhooks pluggable |
+| later: `policy`, `patch`, `snapshot`, `health`, `definitions` | see phases 3 and 4 |
 
 ## Data flow
 

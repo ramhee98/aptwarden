@@ -44,6 +44,27 @@ report:
                                    # (KEV and unscored packages are always shown)
   show: fixable                    # fixable | all
 
+notify:
+  summary: always                  # always | changes | never (per-run summary)
+  subject_prefix: "[aptwarden]"
+  alert:                           # immediate alerts, once per host + vulnerability
+    min_severity: critical         # new findings at or above this severity
+    kev: true                      # ... or listed in CISA KEV, regardless of severity
+    host_errors: true              # a host that starts failing
+    remind_after: 7d               # alert again if still present (0 = never)
+  email:
+    enabled: false
+    host: 192.0.2.25
+    port: 25
+    security: starttls             # starttls (required) | ssl (implicit TLS, port 465) | none
+    tls_verify: true
+    tls_server_name: null          # certificate name if `host` is an IP, e.g. mx.example.org
+    username: null                 # SMTP AUTH, optional
+    password_file: null            # e.g. smtp-password (see Secrets)
+    from: aptwarden@example.org
+    to: [admin@example.org]
+    timeout: 30
+
 hosts:
   - name: proxy01
     address: 192.0.2.10

@@ -17,7 +17,8 @@ from aptwarden.enrich.cvss import CvssLookup
 from aptwarden.enrich.kev import Kev
 from aptwarden.http import HttpClient
 from aptwarden.matcher import merge
-from aptwarden.models import HostInventory
+from aptwarden.models import Finding, HostInventory
+from aptwarden.notify import Dispatcher, HostChanges, Notifier
 from aptwarden.sources import Source, SourceStatus, build_sources
 from aptwarden.state import HostRecord, State, utcnow
 from aptwarden.transport import TransportFactory
@@ -39,6 +40,7 @@ class RunReport:
     sources: list[SourceStatus] = field(default_factory=list)
     hosts: list[HostRecord] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    changes: dict[str, HostChanges] = field(default_factory=dict)
 
     @property
     def data_available(self) -> bool:
@@ -56,8 +58,10 @@ def host_notes(inv: HostInventory) -> list[str]:
 
 class Runner:
     def __init__(self, cfg: Config, *, offline: bool = False, http: HttpClient | None = None,
-                 transports: TransportFactory | None = None):
+                 transports: TransportFactory | None = None,
+                 notifiers: list[Notifier] | None = None):
         self.cfg = cfg
+        self._notifiers = notifiers
         self.offline = offline
         self.http = http or HttpClient()
         self._transports = transports
@@ -101,12 +105,19 @@ class Runner:
             if self._transports is None:
                 factory.cleanup()
 
-    def report(self, hosts: list[HostConfig], *, force_refresh: bool = False) -> RunReport:
+    def report(self, hosts: list[HostConfig], *, force_refresh: bool = False,
+               notify: bool = True) -> RunReport:
         run = RunReport(new_run_id(), "report", utcnow())
         token = aplog.run_id_var.set(run.run_id)
         self.state.start_run(run.run_id, run.command)
         try:
             self._report(run, hosts, force_refresh)
+            if notify:
+                errors = Dispatcher(self.cfg, self.state, self._notifiers).dispatch(run)
+                if errors:
+                    run.notes += [f"notification failed: {e}" for e in errors]
+                    if run.status == "ok":
+                        run.status = "partial"
         except BaseException:
             run.status = "failed"
             raise
@@ -147,6 +158,8 @@ class Runner:
         by_name = {h.name: h for h in hosts}
         for name, result in collected.items():
             h = by_name[name]
+            run.changes[name] = self._changes(name, None if isinstance(result, Exception)
+                                              else findings[name])
             if isinstance(result, Exception):
                 record = HostRecord(run.run_id, name, h.address, False, str(result), {}, [],
                                     utcnow())
@@ -170,3 +183,22 @@ class Runner:
             run.status = "ok"
         log.info("run finished", extra={"status": run.status, "hosts": len(run.hosts),
                                         "failed_hosts": failed_hosts})
+
+    def _changes(self, host: str, findings: list[Finding] | None) -> HostChanges:
+        """Compare with the stored history. ``findings`` is None if the scan failed.
+        Findings are compared by (source package, vulnerability), so an upgrade
+        that leaves a vulnerability open is not reported as new."""
+        previous = self.state.latest(host)
+        if findings is None:
+            return HostChanges(newly_failed=previous is None or previous.ok)
+        last_ok = previous if previous is not None and previous.ok \
+            else self.state.latest(host, ok_only=True)
+        if last_ok is None:
+            return HostChanges(first_scan=True)
+        before = {(f.source_package, f.vuln_id) for f in last_ok.findings}
+        now = {(f.source_package, f.vuln_id) for f in findings}
+        return HostChanges(
+            new=[f for f in findings if (f.source_package, f.vuln_id) not in before],
+            resolved=[f for f in last_ok.findings if (f.source_package, f.vuln_id) not in now],
+            recovered=previous is not None and not previous.ok,
+        )

@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="no network access for vulnerability data, use the cache only")
     p.add_argument("--force-refresh", action="store_true",
                    help="download feeds even if the cache is fresh")
+    p.add_argument("--no-notify", action="store_true",
+                   help="do not send notifications for this run")
 
     p = sub.add_parser("status", help="show the latest stored results (no scanning)")
     _add_output_args(p)
@@ -60,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
     cc = csub.add_parser("check", help="validate the configuration")
     cc.add_argument("--dump", action="store_true", help="print the effective configuration")
 
+    p = sub.add_parser("notify", help="notifications")
+    nsub = p.add_subparsers(dest="notify_command", metavar="SUBCOMMAND", required=True)
+    nsub.add_parser("test", help="send a test message through every configured notifier")
+
     sub.add_parser("version", help="print the version")
     return parser
 
@@ -78,7 +84,8 @@ def cmd_report(args, cfg: config.Config) -> int:
     hosts = cfg.select_hosts(args.host)
     runner = Runner(cfg, offline=args.offline)
     try:
-        run = runner.report(hosts, force_refresh=args.force_refresh)
+        run = runner.report(hosts, force_refresh=args.force_refresh,
+                            notify=not args.no_notify)
     finally:
         runner.close()
     if args.format == "json":
@@ -176,6 +183,32 @@ def cmd_sources_refresh(args, cfg: config.Config) -> int:
     return EXIT_OK if all(s.ok for s in statuses) else EXIT_PROBLEM
 
 
+def cmd_notify_test(args, cfg: config.Config) -> int:
+    import socket
+
+    from aptwarden.notify import Dispatcher, Message
+    from aptwarden.state import State
+
+    state = State(cfg.state_dir / "state.db")
+    try:
+        dispatcher = Dispatcher(cfg, state)
+        if not dispatcher.notifiers:
+            print("no notifier enabled (see notify.email in the configuration)",
+                  file=sys.stderr)
+            return EXIT_USAGE
+        msg = Message("test", f"{cfg.notify['subject_prefix']} test message",
+                      f"Test message from aptwarden {__version__} on {socket.getfqdn()}.\n"
+                      "If you can read this, notifications work.\n")
+        errors = dispatcher.send(msg)
+    finally:
+        state.close()
+    for e in errors:
+        print(f"aptwarden: {e}", file=sys.stderr)
+    if not errors:
+        print(f"sent via {', '.join(n.name for n in dispatcher.notifiers)}")
+    return EXIT_PROBLEM if errors else EXIT_OK
+
+
 def cmd_config_check(args, cfg: config.Config) -> int:
     if args.dump:
         print(json.dumps(cfg.raw, indent=2))
@@ -208,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         ("hosts", "check"): cmd_hosts_check,
         ("sources", "refresh"): cmd_sources_refresh,
         ("config", "check"): cmd_config_check,
+        ("notify", "test"): cmd_notify_test,
     }
     sub = getattr(args, f"{args.command}_command", None)
     handler = handlers[(args.command, sub) if sub else args.command]

@@ -61,6 +61,26 @@ DEFAULTS: dict = {
         },
     },
     "report": {"min_severity": "high", "show": "fixable"},
+    "notify": {
+        "summary": "always",
+        "subject_prefix": "[aptwarden]",
+        "alert": {
+            "min_severity": "critical",
+            "kev": True,
+            "host_errors": True,
+            "remind_after": "7d",
+        },
+        "email": {
+            "enabled": False,
+            "port": 25,
+            "security": "starttls",
+            "tls_verify": True,
+            "tls_server_name": None,
+            "username": None,
+            "password_file": None,
+            "timeout": 30,
+        },
+    },
     "hosts": [],
 }
 
@@ -161,6 +181,10 @@ class Config:
     def report(self) -> dict:
         return self.raw["report"]
 
+    @property
+    def notify(self) -> dict:
+        return self.raw["notify"]
+
     def select_hosts(self, names: list[str] | None) -> list[HostConfig]:
         if not names:
             return list(self.hosts)
@@ -208,7 +232,7 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
     for section in ("state_dir", "cache_dir"):
         merged[section] = _resolve(merged[section], base)
     # Validate every duration early so typos fail at load time, not mid-run.
-    for section in (merged["sources"], merged["enrich"]):
+    for section in (merged["sources"], merged["enrich"], merged["notify"]):
         _check_durations(section)
 
     hosts: list[HostConfig] = []
@@ -236,7 +260,8 @@ def _check_durations(section: dict) -> None:
     for key, value in section.items():
         if isinstance(value, dict):
             _check_durations(value)
-        elif key in ("refresh_interval", "max_age", "cache_ttl", "negative_ttl", "budget"):
+        elif key in ("refresh_interval", "max_age", "cache_ttl", "negative_ttl", "budget",
+                     "remind_after"):
             parse_duration(value)
 
 

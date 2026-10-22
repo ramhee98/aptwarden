@@ -130,3 +130,57 @@ def test_cli_reports_unwritable_directories_cleanly(tmp_path, capsys):
     config_file.write_text(f"cache_dir: {blocker}/cache\nhosts: [{{name: web01}}]\n")
     assert cli.main(["-c", str(config_file), "-q", "hosts", "check"]) == 1
     assert "aptwarden:" in capsys.readouterr().err
+
+
+def test_changes_and_alerts_across_runs(setup):
+    from aptwarden.notify import Message, Notifier
+
+    class Collect(Notifier):
+        name = "collect"
+
+        def __init__(self):
+            self.sent: list[Message] = []
+
+        def send(self, msg):
+            self.sent.append(msg)
+
+    cfg, http, factory = setup
+    notifier = Collect()
+    hosts = cfg.select_hosts(["web01"])
+
+    runner = Runner(cfg, http=http, transports=factory, notifiers=[notifier])
+    run1 = runner.report(hosts)
+    assert run1.changes["web01"].first_scan
+    kinds = [m.kind for m in notifier.sent]
+    assert kinds == ["alert", "summary"]
+    assert "CVE-2026-24061" in notifier.sent[0].body  # KEV
+
+    # openssl upgraded past every fix: its findings are resolved, nothing new
+    from tests.conftest import fixture_text
+    dpkg = fixture_text("dpkg-query-trixie.txt").replace("3.5.1-1+deb13u1", "9.9.9-1")
+    factory.transports["web01"] = FakeTransport("web01", debian_host_commands(dpkg))
+    notifier.sent.clear()
+    run2 = runner.report(hosts)
+    ch = run2.changes["web01"]
+    assert not ch.first_scan and ch.new == []
+    assert {f.source_package for f in ch.resolved} == {"openssl"}
+    assert [m.kind for m in notifier.sent] == ["summary"]  # already alerted
+    assert "Resolved since the last scan" in notifier.sent[0].body
+    runner.close()
+
+
+def test_failed_notification_makes_run_partial(setup):
+    from aptwarden.notify import Notifier, NotifyError
+
+    class Broken(Notifier):
+        name = "broken"
+
+        def send(self, msg):
+            raise NotifyError("relay down")
+
+    cfg, http, factory = setup
+    runner = Runner(cfg, http=http, transports=factory, notifiers=[Broken()])
+    run = runner.report(cfg.select_hosts(["web01"]))
+    assert run.status == "partial"
+    assert any("relay down" in n for n in run.notes)
+    runner.close()

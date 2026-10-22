@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from aptwarden.models import Finding
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS seen (
     vuln_id TEXT NOT NULL,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
+    alerted_at TEXT,
     PRIMARY KEY (host, source_package, vuln_id)
 );
 CREATE INDEX IF NOT EXISTS host_results_host ON host_results (host, scanned_at);
@@ -84,6 +85,8 @@ class State:
         if version > SCHEMA_VERSION:
             raise RuntimeError(f"{path} was written by a newer aptwarden (schema {version})")
         self.db.executescript(_SCHEMA)
+        if version == 1:
+            self.db.execute("ALTER TABLE seen ADD COLUMN alerted_at TEXT")
         self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         self.db.commit()
 
@@ -123,7 +126,8 @@ class State:
         with self.db:
             for f in findings:
                 self.db.execute(
-                    "INSERT INTO seen VALUES (?, ?, ?, ?, ?) "
+                    "INSERT INTO seen (host, source_package, vuln_id, first_seen, last_seen) "
+                    "VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(host, source_package, vuln_id) "
                     "DO UPDATE SET last_seen = excluded.last_seen",
                     (host, f.source_package, f.vuln_id, now, now),
@@ -134,6 +138,35 @@ class State:
                     (host, f.source_package, f.vuln_id),
                 ).fetchone()
                 f.first_seen = row[0]
+
+    def alert_due(self, host: str, findings: list[Finding], remind_after: int,
+                  now: str | None = None) -> list[Finding]:
+        """Findings never alerted, or last alerted more than ``remind_after``
+        seconds ago (0 disables reminders)."""
+        now_dt = datetime.fromisoformat(now or utcnow())
+        due = []
+        for f in findings:
+            row = self.db.execute(
+                "SELECT alerted_at FROM seen WHERE host = ? AND source_package = ? "
+                "AND vuln_id = ?", (host, f.source_package, f.vuln_id)).fetchone()
+            alerted = row[0] if row else None
+            if alerted is None or (
+                remind_after
+                and now_dt - datetime.fromisoformat(alerted) >= timedelta(seconds=remind_after)
+            ):
+                due.append(f)
+        return due
+
+    def mark_alerted(self, host: str, findings: list[Finding], now: str | None = None) -> None:
+        now = now or utcnow()
+        with self.db:
+            for f in findings:
+                self.db.execute(
+                    "INSERT INTO seen VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(host, source_package, vuln_id) "
+                    "DO UPDATE SET alerted_at = excluded.alerted_at",
+                    (host, f.source_package, f.vuln_id, now, now, now),
+                )
 
     def latest(self, host: str, ok_only: bool = False) -> HostRecord | None:
         sql = (

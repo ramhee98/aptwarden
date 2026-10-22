@@ -8,10 +8,10 @@ Tracker and OSV.dev. It scores the findings with CVSS and CISA KEV and reports w
 be fixed right now. No agent runs on the target hosts, and reporting needs no root
 privileges there.
 
-> **Status:** Phase 1 is done: inventory, vulnerability matching, report and status.
-> Next come notifications, custom vulnerability definitions from a Git repository, and
-> patching behind a staged safety net (simulation, Proxmox snapshot, healthcheck,
-> rollback). See [docs/architecture.md](docs/architecture.md).
+> **Status:** Phases 1 and 2 are done: inventory, vulnerability matching, report,
+> status and e-mail notifications. Next come custom vulnerability definitions from a
+> Git repository, and patching behind a staged safety net (simulation, Proxmox
+> snapshot, healthcheck, rollback). See [docs/architecture.md](docs/architecture.md).
 
 ## How it works
 
@@ -149,6 +149,39 @@ enrich:
       api_key_file: nvd-api-key   # with LoadCredential=nvd-api-key:/etc/aptwarden/credentials/nvd-api-key
 ```
 
+### Notifications
+
+Each run sends a summary. The summary lists new and resolved vulnerabilities since the
+last scan, followed by the full report. An immediate alert goes out for:
+
+- new findings at or above `notify.alert.min_severity` (default `critical`)
+- findings listed in CISA KEV, whatever their severity
+- hosts that start failing
+- runs without any vulnerability data
+
+Each host and vulnerability is alerted once, with a reminder after `remind_after`. A
+failed delivery is retried on the next run and marks the run as `partial`.
+
+```yaml
+notify:
+  email:
+    enabled: true
+    host: 192.0.2.25
+    port: 25
+    security: starttls
+    tls_server_name: mx.example.org   # the relay's certificate name when `host` is an IP
+    from: aptwarden@example.org
+    to: [admin@example.org]
+```
+
+```sh
+aptwarden notify test                # send a test message
+aptwarden report --no-notify         # interactive run without mails
+```
+
+If the relay greylists (Proxmox Mail Gateway does by default), whitelist the central
+host's address. Otherwise every alert is delayed and the first attempt fails.
+
 ## Usage
 
 ```
@@ -161,6 +194,7 @@ aptwarden status                       latest stored results, no scanning
 aptwarden hosts check                  connectivity and inventory test
 aptwarden sources refresh [--force]    update the cached feeds
 aptwarden config check [--dump]        validate (and print) the configuration
+aptwarden notify test                  send a test notification
 ```
 
 Example (shortened):
