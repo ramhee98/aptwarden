@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests tools
+      - run: pytest -q
+
+  debian-packages:
+    # Runs with Debian's own packages only, the way the central host is set up.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ["debian:12", "debian:13"]
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 python3-yaml \
+            python3-jsonschema python3-pytest
+      - run: python3 -m pytest -q

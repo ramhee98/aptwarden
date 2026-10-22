@@ -1,0 +1,41 @@
+[Unit]
+Description=aptwarden vulnerability report
+Documentation=https://github.com/ramhee98/aptwarden
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=aptwarden
+Group=aptwarden
+ExecStart=/usr/local/bin/aptwarden --quiet report
+# Exit code 1 means some hosts or sources failed: the unit is marked failed so
+# it shows up in `systemctl --failed` and monitoring.
+
+StateDirectory=aptwarden
+CacheDirectory=aptwarden
+RuntimeDirectory=aptwarden
+ConfigurationDirectory=aptwarden
+
+# Secrets: reference them in config.yaml by name, e.g. api_key_file: nvd-api-key
+#LoadCredential=nvd-api-key:/etc/aptwarden/credentials/nvd-api-key
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
