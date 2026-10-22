@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aptwarden"
+version = "0.1.0"
+description = "CVE monitoring and controlled patching for Debian hosts"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "ramhee98" }]
+dependencies = [
+    "PyYAML>=6.0",
+    "jsonschema>=4.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+aptwarden = "aptwarden.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aptwarden = ["schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+    "integration: tests against real disposable hosts (set APTWARDEN_IT_HOSTS)",
+]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
