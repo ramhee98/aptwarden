@@ -9,7 +9,7 @@ healthcheck and rollback.
 
 - **Core works on any Debian host over SSH.** Proxmox is an optional snapshot provider,
   not a requirement.
-- **Agentless.** The only thing deployed to target hosts (from phase 4 on) is a small
+- **Agentless.** The only thing deployed to target hosts (for patching) is a small
   root-owned helper script. sudo grants access to that script and nothing else.
 - **Few dependencies.** The runtime dependencies are PyYAML and jsonschema. Both are
   available as Debian packages (`python3-yaml`, `python3-jsonschema`). The standard
@@ -36,9 +36,13 @@ healthcheck and rollback.
 | `matcher` | Merges findings from all sources per (host, source package, vulnerability); precedence custom > debian_tracker > osv; drops `not-affected` |
 | `state` | SQLite: runs, per-host results, findings, first-seen tracking |
 | `report` | Text and JSON output |
-| `cli` | `report`, `status`, `hosts check`, `sources refresh`, `config check` |
+| `cli` | `report`, `status`, `patch`, `rollback`, `snapshots`, `patches`, `defs`, `notify test`, `hosts check`, `helper show`, ... |
 | `notify` | Run summary and de-duplicated immediate alerts; e-mail notifier, webhooks pluggable |
-| later: `policy`, `patch`, `snapshot`, `health`, `definitions` | see phases 3 and 4 |
+| `definitions` | Custom definitions: schema, validation, signed-tag Git sync |
+| `patch` | Planner, apt simulation checks, maintenance windows, the patch pipeline |
+| `snapshot` | Snapshot providers: `proxmox` (LXC and QEMU via API token), `none` |
+| `health` | Healthchecks: systemd (on the host), HTTP and TCP (from the central host) |
+| `helper/` | The root helper and sudoers rule for target hosts |
 
 ## Data flow
 
@@ -48,7 +52,8 @@ systemd timer ─► aptwarden report
   ├─ per host (parallel):
   │     inventory ─► sources.match ─► matcher ─► enrich (CVSS, KEV) ─► findings
   ├─ state.db: run, host results, findings, first/last seen
-  └─ output: text/JSON report (phase 2: notifications)
+  ├─ output: text/JSON report, notifications
+  └─ patch runs: per eligible host the patch pipeline (see Patching)
 ```
 
 ## Vulnerability sources
@@ -108,50 +113,89 @@ unimportant). The report separates **fixable now** from everything else. The def
 summary shows fixable findings at or above a configurable severity. `--all` shows
 everything.
 
-## Patching (phase 4)
+## Patching
 
 ```
-plan → preflight → simulate → snapshot → apply → restart → healthcheck ─┬─ ok   → done
-                                                                        └─ fail → rollback (auto|manual) + alert
+plan → preflight → simulate → snapshot → apply → restart → healthcheck ─┬─ ok   → patched
+                                                                        └─ fail → rollback (auto) / alert (manual)
 ```
 
-1. **plan:** Find every installed binary built from a vulnerable source package. Upgrade
-   it only if the candidate version is >= the fixed version.
-2. **preflight:** Run healthchecks *before* patching and abort if they already fail, so
-   that a pre-existing problem cannot trigger a rollback. Also check that the dpkg lock is
-   free, the snapshot feature is available and there is enough disk space.
-3. **simulate:** Run `apt-get -s install --only-upgrade pkg=ver ...`. Abort on any
-   removal, any new package outside the plan (allowlist configurable), any target-version
-   mismatch, or any version in a blocked range.
-4. **snapshot:** Create `aptw-<run-id>` without RAM state by default, and wait for the
-   Proxmox task to finish.
-5. **apply:** Install exactly the simulated packages and versions, non-interactive, with
-   `--force-confold`.
-6. **restart:** needrestart is configurable per host (`auto`, `list` or `off`; default
-   `auto`). Reboot is `never` or `if-required`, inside the maintenance window. After a
-   reboot, wait for SSH.
-7. **healthcheck:** systemd units, HTTP and TCP checks, with a grace period and retries.
-8. **rollback:** `auto` or `manual`. In manual mode aptwarden alerts and you run
-   `aptwarden rollback <run-id>`.
-9. **cleanup:** Delete only snapshots with the `aptw-` prefix that are recorded in
-   `state.db` and older than the configured age.
+1. **plan:** Select fixable findings allowed by the host policy (severity, KEV, not
+   restricted by a definition's `report` action). Group them by installed source
+   package; every installed binary of that source is upgraded together. Refresh the
+   package lists (helper `update`), read the candidates (`apt-cache policy`) and
+   resolve each candidate's **source** version (`apt-cache show`), because binary
+   versions differ by epoch or binNMU (`bsdutils 1:2.41.5-0+deb13u1` comes from
+   `util-linux 2.41.5-0+deb13u1`, `libcap2 1:2.75-10+deb13u1+b3` from
+   `1:2.75-10+deb13u1`). The candidate must reach the fixed version and must not be
+   blocked by a definition.
+2. **preflight:** The helper must answer via `sudo -n`. Healthchecks must be
+   configured and pass *before* patching, so a pre-existing problem cannot trigger a
+   rollback. The Proxmox snapshot feature must be available (a mount point on storage
+   without snapshots fails here).
+3. **simulate:** `apt-get -s install --only-upgrade pkg=ver ...` with exactly the plan.
+   aptwarden aborts on any removal, any newly installed package (allowlist
+   `allow_new_packages`), any upgrade outside the plan (`allow_extra_upgrades`), any
+   apt error, and any target version mismatch.
+4. **snapshot:** `aptw_<run-id>` (letters, digits and `_`; at most 40 characters),
+   without RAM state unless `snapshots.vmstate`. The snapshot is recorded in
+   `state.db`. Only recorded `aptw_` snapshots are ever rolled back to or deleted.
+5. **apply:** helper `install` with the same arguments, followed by a dpkg version
+   check.
+6. **restart:** needrestart `auto` (helper `needrestart restart`), `list` or `off`.
+   With `reboot: if-required`, the host reboots when `/run/reboot-required` exists or
+   needrestart reports a pending kernel. aptwarden waits until the boot marker changes.
+   The marker is the kernel boot id plus the start time of PID 1, so it also works for
+   LXC, which shares the host kernel.
+7. **healthcheck:** after `health.grace`, retried `health.retries` times.
+8. **rollback:** Proxmox rollback with `start=1`. For a running LXC this takes about
+   3 s, because Proxmox stops and restarts the container itself. aptwarden then waits
+   for the host and runs the healthchecks again. With `rollback: manual` it only
+   alerts; `aptwarden rollback --host H` does it later.
+9. **cleanup:** at the end of a patch run, or with `aptwarden snapshots cleanup`,
+   recorded snapshots (active or rolled back) older than `snapshots.keep` are deleted.
+   A snapshot still needed for a rollback (`needs-manual-rollback`, `failed`,
+   `rollback-failed`) is kept.
 
-- **Without a snapshot provider** (plain Debian servers, PVE nodes): auto-patching
-  requires an explicit `allow_without_snapshot: true`. A failed healthcheck then only
-  raises an alert, because apt downgrades are not a reliable rollback.
-- **Without configured healthchecks**, aptwarden refuses to auto-patch.
+**Statuses:** `patched`, `rolled-back`, `needs-manual-rollback`, `failed`,
+`rollback-failed`, `aborted` (nothing changed), `nothing-to-do`, `skipped`,
+`dry-run`. Every status from `rolled-back` through `rollback-failed` raises an
+immediate alert and marks the run `partial`. Patch runs come from an hourly timer, so
+they only send mail when something happened or an abort has a new reason.
+
+**Without a snapshot provider** (plain Debian servers), patching needs
+`allow_without_snapshot: true`. A failed healthcheck then ends as `failed` with an
+alert, because apt downgrades are not a reliable rollback.
+
+A patch lock (`flock` on `state_dir/patch.lock`) keeps the timer and a manual run from
+overlapping.
 
 ### Target host privileges
 
-A sudoers rule on `apt-get` itself amounts to root. `apt-get install *` allows
-`-o APT::Update::Pre-Invoke::=/bin/sh`. Target hosts therefore get
-`/usr/local/lib/aptwarden/aptwarden-helper`, a POSIX shell script owned by root:
+A sudoers rule on `apt-get` itself amounts to root (`-o APT::Update::Pre-Invoke::=/bin/sh`).
+Target hosts therefore get `/usr/local/lib/aptwarden/aptwarden-helper`
+(`aptwarden helper show`), a POSIX shell script owned by root. Its properties:
 
-- It has fixed subcommands: `update`, `simulate`, `install`, `needrestart`, `reboot` and
-  `pin`.
-- It validates package names and versions with a regex and only allows `--only-upgrade`.
-- sudo grants the `aptwarden` user this one script.
-- Inventory needs no privileges at all.
+- **Fixed subcommands:** `version`, `update`, `simulate`, `install`, `needrestart
+  list|restart` and `reboot`.
+- **Strict argument checks:** arguments must be `package=version` with a restricted
+  character set. Package names start alphanumeric, so options are impossible, and
+  `--` separates them for apt.
+- **Upgrades only:** it always runs `--only-upgrade --no-install-recommends` and keeps
+  existing config files.
+- **Fixed environment:** `PATH`, `DEBIAN_FRONTEND=noninteractive`, and
+  `NEEDRESTART_SUSPEND` (needrestart runs explicitly with the host's mode).
+
+sudo allows exactly this script (`aptwarden helper show --sudoers`). Inventory needs no
+privileges.
+
+### Proxmox token
+
+The token belongs to a dedicated user and has privilege separation. The role
+`VM.Audit, VM.Snapshot, VM.Snapshot.Rollback, VM.PowerMgmt` is granted to both the user
+and the token on a pool that contains only the guests aptwarden may touch, so other
+guests and the node are inaccessible. This is verified against PVE 9.2. The API
+certificate is pinned by its SHA-256 fingerprint or verified against a CA.
 
 ## Custom definitions
 
@@ -200,14 +244,14 @@ vulnerability (false-positive overrides).
 - **The accepted definitions are stored in `state.db`,** so wiping the cache or a
   broken upstream cannot remove or roll them back.
 - **Definitions only tighten local policy.** `auto-patch` takes effect only if the
-  host policy already allows auto-patching for that severity (phase 4).
+  host policy already allows auto-patching for that severity.
 - **Definitions are data only:** no package sources, commands or scripts.
 
 **`block`** marks versions as known-bad (think xz 5.6.x):
 
 - installed blocked versions always raise an alert, whatever their severity,
-- phase 4 never installs them,
-- optionally pins them away per host (`enforce_block: pin`).
+- the patch pipeline never installs them,
+- pinning them away per host (`enforce_block: pin`) is planned.
 
 ## Storage
 
@@ -256,6 +300,7 @@ from systemd credentials (`*_file` keys) and never stored inline. On the target 
 2. Notifications (email, ntfy, Slack-compatible, generic webhook), alert de-duplication.
 3. Definitions repository: schema, signed-tag sync, rollback protection, precedence,
    block alerts.
-4. Patching: helper, simulation parser, Proxmox snapshot provider, healthchecks,
-   needrestart/reboot, rollback, cleanup, maintenance windows, integration tests.
+4. Patching: helper, simulation checks, Proxmox snapshots, healthchecks,
+   needrestart/reboot, automatic rollback, cleanup, maintenance windows, live
+   integration tests.
 5. Later: Trivy plugin for Docker images, small status web page.

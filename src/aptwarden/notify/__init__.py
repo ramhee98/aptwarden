@@ -108,14 +108,62 @@ def _sorted(findings: list[Finding]) -> list[Finding]:
                                            f.source_package, f.vuln_id))
 
 
+def _patch_lines(p, packages: bool = False) -> list[str]:
+    lines = [f"{p.host}: {p.status}" + (f" ({p.reason})" if p.reason else "")]
+    for item in p.items:
+        lines.append(f"  {item['source_package']} {item['installed']} -> "
+                     f"{item['target_source_version']}  ({len(item['vulns'])} vulnerabilities, "
+                     f"{item['severity']})")
+        if packages:
+            lines += [f"      {b} -> {v}" for b, v in sorted(item["targets"].items())]
+    for item in p.skipped_items:
+        lines.append(f"  skipped {item['source_package']}: {item['skipped']}")
+    if p.snapshot:
+        lines.append(f"  snapshot: {p.snapshot['name']} ({p.snapshot['target']})")
+    if p.restarted:
+        lines.append(f"  restarted: {', '.join(p.restarted)}")
+    if p.rebooted:
+        lines.append("  rebooted")
+    lines += [f"  problem: {x}" for x in p.problems]
+    lines += [f"  note: {x}" for x in p.notes]
+    lines += [f"  health after: {x}" for x in p.health_after]
+    return lines
+
+
+def noteworthy_patches(run: RunReport) -> list:
+    """Patch results worth a message: changes, problems, or a new reason to abort."""
+    from aptwarden.patch.runner import CHANGED_STATUSES
+
+    return [p for p in run.patches if p.status in CHANGED_STATUSES
+            or (p.status == "aborted" and not p.repeated)]
+
+
+def compose_patch_summary(prefix: str, run: RunReport) -> Message:
+    results = noteworthy_patches(run)
+    counts = Counter(p.status for p in results)
+    subject = f"{prefix} patch run: " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+    lines = [f"aptwarden patch run {run.run_id} · status {run.status}", ""]
+    for p in run.patches:
+        lines += _patch_lines(p) + [""]
+    lines += [f"note: {n}" for n in run.notes]
+    return Message("summary", subject, "\n".join(lines))
+
+
 def compose_alert(prefix: str, run: RunReport, alerts: dict[str, list[Finding]],
                   failed: list[HostRecord]) -> Message | None:
-    no_data = not run.data_available
+    no_data = not run.data_available and bool(run.hosts)
     source_alerts = [(s.name, a) for s in run.sources for a in s.alerts]
-    if not (alerts or failed or no_data or source_alerts):
+    patch_alerts = [p for p in run.patches if p.alert]
+    if not (alerts or failed or no_data or source_alerts or patch_alerts):
         return None
     parts = []
     lines = [f"aptwarden alert · run {run.run_id} · {run.started_at}", ""]
+    if patch_alerts:
+        parts.append("patching: " + ", ".join(f"{p.host} {p.status}" for p in patch_alerts))
+        lines.append("Patching needs attention:")
+        for p in patch_alerts:
+            lines += ["  " + x for x in _patch_lines(p)]
+        lines.append("")
     if source_alerts:
         parts.append("source problems")
         lines.append("Problems with vulnerability sources:")
@@ -253,6 +301,11 @@ class Dispatcher:
                 for host, findings in alerts.items():
                     self.state.mark_alerted(host, findings)
 
+        if run.command.startswith("patch"):
+            # Patch runs are frequent (timer): report only what happened.
+            if noteworthy_patches(run) and ncfg["summary"] != "never":
+                errors += self.send(compose_patch_summary(prefix, run))
+            return errors
         policy = ncfg["summary"]
         changed = any(c.changed for c in run.changes.values())
         if policy == "always" or (policy == "changes" and (changed or alert is not None

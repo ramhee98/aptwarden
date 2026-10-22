@@ -62,6 +62,37 @@ def build_parser() -> argparse.ArgumentParser:
     cc = csub.add_parser("check", help="validate the configuration")
     cc.add_argument("--dump", action="store_true", help="print the effective configuration")
 
+    p = sub.add_parser("patch", help="patch hosts (snapshot, update, healthcheck, rollback)")
+    p.add_argument("--host", action="append", metavar="NAME")
+    p.add_argument("--dry-run", action="store_true",
+                   help="plan and simulate only, change nothing")
+    p.add_argument("--ignore-window", action="store_true",
+                   help="patch outside the maintenance window")
+    p.add_argument("--no-notify", action="store_true")
+    p.add_argument("--format", choices=["text", "json"], default="text")
+
+    p = sub.add_parser("rollback", help="roll a host back to an aptwarden snapshot")
+    p.add_argument("--host", required=True, metavar="NAME")
+    p.add_argument("--snapshot", help="snapshot name (default: the newest one of this host)")
+    p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+
+    p = sub.add_parser("snapshots", help="aptwarden's snapshots")
+    snsub = p.add_subparsers(dest="snapshots_command", metavar="SUBCOMMAND", required=True)
+    sl = snsub.add_parser("list", help="snapshots recorded by aptwarden")
+    sl.add_argument("--host", action="append", metavar="NAME")
+    sc = snsub.add_parser("cleanup", help="delete snapshots older than snapshots.keep")
+    sc.add_argument("--host", action="append", metavar="NAME")
+    sc.add_argument("--dry-run", action="store_true")
+
+    p = sub.add_parser("patches", help="patch history")
+    p.add_argument("--host", metavar="NAME")
+    p.add_argument("--limit", type=int, default=20)
+
+    p = sub.add_parser("helper", help="the root helper for target hosts")
+    hsub2 = p.add_subparsers(dest="helper_command", metavar="SUBCOMMAND", required=True)
+    hs = hsub2.add_parser("show", help="print the helper script (or the sudoers rule)")
+    hs.add_argument("--sudoers", action="store_true")
+
     p = sub.add_parser("defs", help="custom vulnerability definitions")
     dsub = p.add_subparsers(dest="defs_command", metavar="SUBCOMMAND", required=True)
     dv = dsub.add_parser("validate", help="validate a definitions directory (no config needed)")
@@ -144,6 +175,47 @@ def cmd_status(args, cfg: config.Config) -> int:
     return EXIT_OK
 
 
+def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[str]:
+    """Problems that would stop patching this host."""
+    from aptwarden.patch.runner import HELPER_VERSION
+    from aptwarden.runner import Runner
+    from aptwarden.snapshot import SnapshotError
+    from aptwarden.transport import TransportError, TransportFactory
+
+    notes = []
+    factory = TransportFactory()
+    try:
+        t = factory.create(h)
+        try:
+            r = t.run(["sudo", "-n", h.ssh.helper, "version"], timeout=30)
+            if r.stdout.strip() != f"aptwarden-helper {HELPER_VERSION}":
+                notes.append("helper/sudo NOT ready: " + ((r.stderr or r.stdout).strip()
+                                                          or f"exit {r.returncode}")[:80])
+            else:
+                notes.append("helper ok")
+        except TransportError as e:
+            notes.append(f"helper check failed: {e}")
+        finally:
+            t.close()
+    finally:
+        factory.cleanup()
+    if not h.healthchecks:
+        notes.append("no healthchecks (patching would abort)")
+    if h.snapshot["provider"] == "none":
+        notes.append("no snapshots" + ("" if h.policy["allow_without_snapshot"]
+                                       else " (patching would abort)"))
+    else:
+        runner = Runner(runner_cfg, offline=True)
+        try:
+            problems = runner.provider(h).check()
+            notes.append("snapshot ok" if not problems else "snapshot NOT ready: " + problems[0])
+        except SnapshotError as e:
+            notes.append(f"snapshot NOT ready: {e}")
+        finally:
+            runner.close()
+    return notes
+
+
 def cmd_hosts_check(args, cfg: config.Config) -> int:
     from aptwarden.runner import Runner
 
@@ -173,6 +245,8 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
                 notes.append(key.replace("_", " "))
         if r.facts.get("unattended_upgrade_periodic", "0") not in ("", "0"):
             notes.append("unattended-upgrades active")
+        if "patch" in h.policy["modes"] or "dry-run" in h.policy["modes"]:
+            notes += _patch_readiness(h, runner_cfg=cfg)
         rows.append([h.name, h.address, "ok", f"{r.debian_version} ({r.codename})",
                      str(len(r.packages)), ", ".join(notes)])
     print("\n".join(report.format_table(rows, indent="")))
@@ -286,6 +360,133 @@ def cmd_defs_list(args, cfg: config.Config) -> int:
     return EXIT_OK
 
 
+def _patch_text(run) -> str:
+    from aptwarden.notify import _patch_lines
+
+    lines = [f"aptwarden {run.command} · run {run.run_id} · status {run.status}", ""]
+    for p in run.patches:
+        lines += _patch_lines(p, packages=p.dry_run)
+        lines += [f"  health now: {x}" for x in p.health_before] if p.dry_run else []
+        lines.append("")
+    lines += [f"note: {n}" for n in run.notes]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cmd_patch(args, cfg: config.Config) -> int:
+    from aptwarden.runner import Runner
+
+    runner = Runner(cfg)
+    try:
+        run = runner.patch(cfg.select_hosts(args.host), dry_run=args.dry_run,
+                           ignore_window=args.ignore_window,
+                           notify=not args.no_notify and not args.dry_run)
+    except RuntimeError as e:
+        print(f"aptwarden: {e}", file=sys.stderr)
+        return EXIT_PROBLEM
+    finally:
+        runner.close()
+    if args.format == "json":
+        print(json.dumps({"run_id": run.run_id, "status": run.status, "notes": run.notes,
+                          "patches": [p.to_dict() for p in run.patches]}, indent=2))
+    else:
+        sys.stdout.write(_patch_text(run))
+    return EXIT_OK if run.status == "ok" else EXIT_PROBLEM
+
+
+def cmd_rollback(args, cfg: config.Config) -> int:
+    from aptwarden.patch.runner import PatchRunner
+    from aptwarden.runner import Runner, new_run_id
+    from aptwarden.snapshot import SnapshotRef
+    from aptwarden.transport import TransportFactory
+
+    [host] = cfg.select_hosts([args.host])
+    runner = Runner(cfg, offline=True)
+    factory = TransportFactory()
+    try:
+        snaps = runner.state.snapshots(host.name, ("active", "rolled-back"))
+        if args.snapshot:
+            snaps = [s for s in snaps if s["name"] == args.snapshot]
+        if not snaps:
+            print(f"aptwarden: no active aptwarden snapshot for {host.name}"
+                  + (f" named {args.snapshot}" if args.snapshot else ""), file=sys.stderr)
+            return EXIT_PROBLEM
+        snap = snaps[0]
+        if not args.yes:
+            answer = input(f"Roll {host.name} back to {snap['name']} ({snap['created_at']})? "
+                           "Everything written since then is lost. [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                return EXIT_USAGE
+        ref = SnapshotRef(snap["provider"], snap["target"], snap["name"])
+        transport = factory.create(host)
+        try:
+            result = PatchRunner(runner.state, []).manual_rollback(
+                host, transport, runner.provider(host), ref, new_run_id())
+        finally:
+            transport.close()
+    finally:
+        factory.cleanup()
+        runner.close()
+    print(f"{host.name}: {result.status} ({result.reason})")
+    for x in result.health_after:
+        print(f"  health: {x}")
+    return EXIT_OK if result.status == "rolled-back" else EXIT_PROBLEM
+
+
+def cmd_snapshots_list(args, cfg: config.Config) -> int:
+    from aptwarden.state import State
+
+    state = State(cfg.state_dir / "state.db")
+    try:
+        rows = [["HOST", "SNAPSHOT", "TARGET", "CREATED", "STATE", "RUN"]]
+        for h in cfg.select_hosts(args.host):
+            for snap in state.snapshots(h.name, state=None):
+                rows.append([h.name, snap["name"], snap["target"], snap["created_at"],
+                             snap["state"], snap["run_id"]])
+    finally:
+        state.close()
+    print("\n".join(report.format_table(rows, indent="")))
+    return EXIT_OK
+
+
+def cmd_snapshots_cleanup(args, cfg: config.Config) -> int:
+    from aptwarden.runner import Runner
+
+    runner = Runner(cfg, offline=True)
+    try:
+        notes = runner.cleanup_snapshots(cfg.select_hosts(args.host), dry_run=args.dry_run)
+    finally:
+        runner.close()
+    print("\n".join(notes) if notes else "nothing to clean up")
+    return EXIT_OK
+
+
+def cmd_patches(args, cfg: config.Config) -> int:
+    from aptwarden.state import State
+
+    state = State(cfg.state_dir / "state.db")
+    try:
+        history = state.patches(args.host, args.limit)
+    finally:
+        state.close()
+    rows = [["STARTED", "HOST", "STATUS", "PACKAGES", "SNAPSHOT", "REASON"]]
+    for p in history:
+        pkgs = [i["source_package"] for i in p["items"]]
+        rows.append([p["started_at"], p["host"], p["status"],
+                     f"{len(pkgs)}: {report.truncate(','.join(pkgs), 30)}" if pkgs else "-",
+                     (p.get("snapshot") or {}).get("name", "-"),
+                     report.truncate(p["reason"], 60)])
+    print("\n".join(report.format_table(rows, indent="")))
+    return EXIT_OK
+
+
+def cmd_helper_show(args) -> int:
+    from importlib import resources
+
+    name = "helper/sudoers" if args.sudoers else "helper/aptwarden-helper"
+    sys.stdout.write(resources.files("aptwarden").joinpath(name).read_text())
+    return EXIT_OK
+
+
 def cmd_config_check(args, cfg: config.Config) -> int:
     if args.dump:
         print(json.dumps(cfg.raw, indent=2))
@@ -305,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
     if args.command == "defs" and args.defs_command == "validate":
         return cmd_defs_validate(args)
+    if args.command == "helper":
+        return cmd_helper_show(args)
     try:
         cfg = config.load(args.config)
     except config.ConfigError as e:
@@ -321,6 +524,11 @@ def main(argv: list[str] | None = None) -> int:
         ("sources", "refresh"): cmd_sources_refresh,
         ("config", "check"): cmd_config_check,
         ("notify", "test"): cmd_notify_test,
+        "patch": cmd_patch,
+        "rollback": cmd_rollback,
+        "patches": cmd_patches,
+        ("snapshots", "list"): cmd_snapshots_list,
+        ("snapshots", "cleanup"): cmd_snapshots_cleanup,
         ("defs", "sync"): cmd_defs_sync,
         ("defs", "list"): cmd_defs_list,
     }

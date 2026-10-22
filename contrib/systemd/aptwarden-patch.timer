@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly aptwarden patch run (each host is only patched inside its maintenance window)
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=false
+
+[Install]
+WantedBy=timers.target

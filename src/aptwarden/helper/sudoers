@@ -1,0 +1,4 @@
+# /etc/sudoers.d/aptwarden (mode 0440): aptwarden may run its helper as root,
+# nothing else. The helper validates every argument itself.
+Defaults:aptwarden !lecture, env_reset
+aptwarden ALL=(root) NOPASSWD: /usr/local/lib/aptwarden/aptwarden-helper

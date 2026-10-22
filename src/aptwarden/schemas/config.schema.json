@@ -325,6 +325,71 @@
           }
         }
       }
+    },
+    "policy": {
+      "$ref": "#/$defs/policy"
+    },
+    "health": {
+      "$ref": "#/$defs/health"
+    },
+    "snapshots": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keep": {
+          "$ref": "#/$defs/duration"
+        },
+        "vmstate": {
+          "type": "boolean"
+        }
+      }
+    },
+    "proxmox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "node",
+        "token_id",
+        "token_file"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "node": {
+          "type": "string"
+        },
+        "token_id": {
+          "type": "string",
+          "pattern": "^[^@!\\s]+@[^@!\\s]+![^@!\\s]+$"
+        },
+        "token_file": {
+          "type": "string"
+        },
+        "tls_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^([0-9A-Fa-f]{2}:?){32}$"
+        },
+        "ca_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_timeout": {
+          "type": "integer",
+          "minimum": 10
+        }
+      }
     }
   },
   "$defs": {
@@ -398,6 +463,10 @@
               "integer"
             ]
           }
+        },
+        "helper": {
+          "description": "Path of aptwarden-helper on the target host",
+          "type": "string"
         }
       }
     },
@@ -430,8 +499,227 @@
           "items": {
             "type": "string"
           }
+        },
+        "snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider"
+          ],
+          "properties": {
+            "provider": {
+              "enum": [
+                "proxmox",
+                "none"
+              ]
+            },
+            "vmid": {
+              "type": "integer",
+              "minimum": 100
+            },
+            "type": {
+              "enum": [
+                "lxc",
+                "qemu"
+              ]
+            },
+            "node": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "proxmox"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "provider",
+              "vmid",
+              "type"
+            ]
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        },
+        "healthchecks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/healthcheck"
+          }
         }
       }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "description": "Allowed modes: report, dry-run (plan + simulation), patch",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "report",
+              "dry-run",
+              "patch"
+            ]
+          }
+        },
+        "auto_patch_severities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "unknown"
+            ]
+          }
+        },
+        "auto_patch_kev": {
+          "description": "Also patch KEV-listed vulnerabilities of any severity",
+          "type": "boolean"
+        },
+        "window": {
+          "description": "Maintenance windows, e.g. 'Mon..Fri 02:00-04:00'; empty = any time",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "restart": {
+          "description": "needrestart: auto (restart services), list (report only), off",
+          "enum": [
+            "auto",
+            "list",
+            "off"
+          ]
+        },
+        "reboot": {
+          "enum": [
+            "never",
+            "if-required"
+          ]
+        },
+        "rollback": {
+          "enum": [
+            "auto",
+            "manual"
+          ]
+        },
+        "allow_without_snapshot": {
+          "type": "boolean"
+        },
+        "allow_extra_upgrades": {
+          "description": "Allow upgrades of packages outside the plan pulled in as dependencies",
+          "type": "boolean"
+        },
+        "allow_new_packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "grace": {
+          "$ref": "#/$defs/duration"
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interval": {
+          "$ref": "#/$defs/duration"
+        }
+      }
+    },
+    "healthcheck": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "systemd"
+          ],
+          "properties": {
+            "systemd": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9@._:-]+$"
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "http"
+          ],
+          "properties": {
+            "http": {
+              "type": "string",
+              "pattern": "^https?://"
+            },
+            "expect_status": {
+              "oneOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              ]
+            },
+            "contains": {
+              "type": "string"
+            },
+            "verify_tls": {
+              "type": "boolean"
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tcp"
+          ],
+          "properties": {
+            "tcp": {
+              "type": "string",
+              "pattern": "^.+:[0-9]+$"
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      ]
     }
   }
 }

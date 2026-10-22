@@ -12,6 +12,7 @@ log:
 
 ssh:                               # defaults for all hosts, overridable per host
   user: aptwarden
+  helper: /usr/local/lib/aptwarden/aptwarden-helper
   port: 22
   identity_file: /etc/aptwarden/ssh/id_ed25519
   known_hosts_file: /var/lib/aptwarden/known_hosts
@@ -74,11 +75,56 @@ notify:
     to: [admin@example.org]
     timeout: 30
 
+proxmox:                           # needed for snapshot provider proxmox
+  url: https://192.0.2.9:8006
+  node: pve1
+  token_id: aptwarden@pve!central
+  token_file: credentials/proxmox-token
+  tls_fingerprint: null            # "AB:CD:..." pins the API certificate (SHA-256)
+  ca_file: null                    # or verify against a CA file
+  timeout: 30
+  task_timeout: 600
+
+snapshots:
+  keep: 7d                         # aptwarden's own snapshots are deleted after this
+  vmstate: false                   # QEMU only: include RAM state
+
+policy:                            # defaults for every host, overridable per host
+  modes: [report]                  # report | dry-run | patch
+  auto_patch_severities: [critical, high]
+  auto_patch_kev: true
+  window: []                       # e.g. ["Mon..Fri 02:00-04:00"]; empty = any time
+  restart: auto                    # needrestart: auto | list | off
+  reboot: never                    # never | if-required
+  rollback: auto                   # auto | manual
+  allow_without_snapshot: false
+  allow_extra_upgrades: false      # dependency upgrades outside the plan
+  allow_new_packages: []           # packages that may be newly installed
+
+health:                            # timing of the post-patch healthchecks
+  grace: 10s
+  retries: 6
+  interval: 5s
+
 hosts:
   - name: proxy01
     address: 192.0.2.10
+    snapshot: {provider: proxmox, vmid: 101, type: lxc}
+    policy:
+      modes: [report, dry-run, patch]
+      window: ["Mon..Fri 02:00-04:00"]
+    healthchecks:
+      - systemd: nginx.service
+      - http: https://proxy01.example.org/healthz
+        expect_status: 200       # or a list
+        contains: "ok"           # optional
+        verify_tls: true
+      - tcp: 192.0.2.10:443
   - name: mail01
     address: mail01.example.org
     ssh: {port: 2222}
-  - name: aptwarden                # the central host itself
+    snapshot: {provider: proxmox, vmid: 102, type: lxc}
+    policy: {modes: [report, patch], rollback: manual, window: ["Sun 04:00-05:00"]}
+    healthchecks: [{systemd: postfix@-.service}]
+  - name: aptwarden                # the central host itself: report only
     transport: local

@@ -25,7 +25,7 @@ aptwarden = "aptwarden.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aptwarden = ["schemas/*.json"]
+aptwarden = ["schemas/*.json", "helper/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,3 +41,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# fixtures quote real tool output verbatim
+"tests/**" = ["E501"]

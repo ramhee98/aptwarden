@@ -13,6 +13,8 @@ from pathlib import Path
 import jsonschema
 import yaml
 
+from aptwarden.patch import window
+
 DEFAULT_PATH = "/etc/aptwarden/config.yaml"
 
 DEFAULTS: dict = {
@@ -30,7 +32,22 @@ DEFAULTS: dict = {
         "connect_timeout": 10,
         "command_timeout": 300,
         "options": {},
+        "helper": "/usr/local/lib/aptwarden/aptwarden-helper",
     },
+    "policy": {
+        "modes": ["report"],
+        "auto_patch_severities": ["critical", "high"],
+        "auto_patch_kev": True,
+        "window": [],
+        "restart": "auto",
+        "reboot": "never",
+        "rollback": "auto",
+        "allow_without_snapshot": False,
+        "allow_extra_upgrades": False,
+        "allow_new_packages": [],
+    },
+    "health": {"grace": "10s", "retries": 6, "interval": "5s"},
+    "snapshots": {"keep": "7d", "vmstate": False},
     "sources": {
         "debian_tracker": {
             "enabled": True,
@@ -138,6 +155,7 @@ class SshSettings:
     connect_timeout: int
     command_timeout: int
     options: dict = field(default_factory=dict)
+    helper: str = "/usr/local/lib/aptwarden/aptwarden-helper"
 
 
 @dataclass
@@ -147,6 +165,10 @@ class HostConfig:
     transport: str
     ssh: SshSettings
     tags: list[str] = field(default_factory=list)
+    policy: dict = field(default_factory=dict)  # merged with the global policy
+    health: dict = field(default_factory=dict)
+    healthchecks: list[dict] = field(default_factory=list)
+    snapshot: dict = field(default_factory=lambda: {"provider": "none"})
 
 
 @dataclass
@@ -195,6 +217,14 @@ class Config:
     def notify(self) -> dict:
         return self.raw["notify"]
 
+    @property
+    def proxmox(self) -> dict | None:
+        return self.raw.get("proxmox")
+
+    @property
+    def snapshots(self) -> dict:
+        return self.raw["snapshots"]
+
     def select_hosts(self, names: list[str] | None) -> list[HostConfig]:
         if not names:
             return list(self.hosts)
@@ -242,7 +272,8 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
     for section in ("state_dir", "cache_dir"):
         merged[section] = _resolve(merged[section], base)
     # Validate every duration early so typos fail at load time, not mid-run.
-    for section in (merged["sources"], merged["enrich"], merged["notify"]):
+    for section in (merged["sources"], merged["enrich"], merged["notify"], merged["health"],
+                    merged["snapshots"]):
         _check_durations(section)
 
     hosts: list[HostConfig] = []
@@ -254,6 +285,16 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
         ssh = deep_merge(merged["ssh"], h.get("ssh", {}))
         ssh["identity_file"] = _resolve(ssh["identity_file"], base)
         ssh["known_hosts_file"] = _resolve(ssh["known_hosts_file"], base)
+        policy = deep_merge(merged["policy"], h.get("policy", {}))
+        for w in policy["window"]:
+            try:
+                window.parse(w)
+            except ValueError as e:
+                raise ConfigError(f"host {h['name']}: {e}") from None
+        snapshot = h.get("snapshot", {"provider": "none"})
+        if snapshot["provider"] == "proxmox" and "proxmox" not in merged:
+            raise ConfigError(f"host {h['name']}: snapshot provider proxmox needs a proxmox "
+                              f"section")
         hosts.append(
             HostConfig(
                 name=h["name"],
@@ -261,6 +302,10 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
                 transport=h.get("transport", "ssh"),
                 ssh=SshSettings(**ssh),
                 tags=h.get("tags", []),
+                policy=policy,
+                health=deep_merge(merged["health"], h.get("health", {})),
+                healthchecks=h.get("healthchecks", []),
+                snapshot=snapshot,
             )
         )
     return Config(path=path, raw=merged, hosts=hosts)
@@ -271,7 +316,7 @@ def _check_durations(section: dict) -> None:
         if isinstance(value, dict):
             _check_durations(value)
         elif key in ("refresh_interval", "max_age", "cache_ttl", "negative_ttl", "budget",
-                     "remind_after"):
+                     "remind_after", "grace", "interval", "keep"):
             parse_duration(value)
 
 

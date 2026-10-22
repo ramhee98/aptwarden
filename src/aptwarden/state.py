@@ -10,7 +10,7 @@ from pathlib import Path
 
 from aptwarden.models import Finding
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -58,6 +58,24 @@ CREATE INDEX IF NOT EXISTS host_results_host ON host_results (host, scanned_at);
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS patches (
+    run_id TEXT NOT NULL,
+    host TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (run_id, host)
+);
+CREATE TABLE IF NOT EXISTS snapshots (
+    provider TEXT NOT NULL,
+    target TEXT NOT NULL,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    state TEXT NOT NULL,
+    PRIMARY KEY (provider, target, name)
 );
 """
 
@@ -204,6 +222,47 @@ class State:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [(k, json.dumps(v)) for k, v in values.items()],
             )
+
+    def save_patch(self, run_id: str, host: str, status: str, started_at: str,
+                   data: dict) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO patches VALUES (?, ?, ?, ?, ?)",
+                            (run_id, host, status, started_at, json.dumps(data)))
+
+    def patches(self, host: str | None = None, limit: int = 20) -> list[dict]:
+        sql = "SELECT data FROM patches" + (" WHERE host = ?" if host else "") + \
+            " ORDER BY started_at DESC, run_id DESC LIMIT ?"
+        args = (host, limit) if host else (limit,)
+        return [json.loads(r[0]) for r in self.db.execute(sql, args)]
+
+    def add_snapshot(self, provider: str, target: str, name: str, host: str,
+                     run_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO snapshots VALUES (?, ?, ?, ?, ?, ?, 'active')",
+                            (provider, target, name, host, run_id, utcnow()))
+
+    def set_snapshot_state(self, provider: str, target: str, name: str, state: str) -> None:
+        with self.db:
+            self.db.execute("UPDATE snapshots SET state = ? WHERE provider = ? AND target = ? "
+                            "AND name = ?", (state, provider, target, name))
+
+    def snapshots(self, host: str | None = None,
+                  state: str | tuple[str, ...] | None = "active") -> list[dict]:
+        """Recorded snapshots; ``state`` filters by one or several states."""
+        sql = "SELECT provider, target, name, host, run_id, created_at, state FROM snapshots"
+        where, args = [], []
+        if host:
+            where.append("host = ?")
+            args.append(host)
+        if state:
+            states = (state,) if isinstance(state, str) else tuple(state)
+            where.append(f"state IN ({', '.join('?' * len(states))})")
+            args += states
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        keys = ("provider", "target", "name", "host", "run_id", "created_at", "state")
+        return [dict(zip(keys, r, strict=True))
+                for r in self.db.execute(sql + " ORDER BY created_at DESC", args)]
 
     def run_info(self, run_id: str) -> dict | None:
         row = self.db.execute(

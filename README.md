@@ -1,17 +1,31 @@
 # aptwarden
 
-CVE monitoring and, in a later phase, controlled patching for Debian hosts.
+CVE monitoring and controlled patching for Debian hosts.
 
 aptwarden runs on one central host and connects to your Debian servers over SSH. It
 inventories their installed packages and matches them against the Debian Security
-Tracker and OSV.dev. It scores the findings with CVSS and CISA KEV and reports what can
-be fixed right now. No agent runs on the target hosts, and reporting needs no root
-privileges there.
+Tracker, OSV.dev and your own signed definitions, scores the findings with CVSS and
+CISA KEV, and reports what can be fixed right now. No agent runs on the target hosts,
+and reporting needs no root privileges there.
 
-> **Status:** Phases 1 to 3 are done: inventory, vulnerability matching, report,
-> status, e-mail notifications and custom definitions from a signed Git repository.
-> Next comes patching behind a staged safety net (simulation, Proxmox snapshot,
-> healthcheck, rollback). See [docs/architecture.md](docs/architecture.md).
+Where you allow it, aptwarden also patches, behind a staged safety net:
+
+1. simulation
+2. Proxmox snapshot
+3. upgrade of exactly the affected packages
+4. service restarts
+5. healthchecks
+6. automatic rollback on failure
+
+> **Status:** All four phases are done:
+>
+> - reporting
+> - e-mail notifications
+> - signed custom definitions
+> - patching with Proxmox snapshots and rollback
+>
+> Docker image scanning and a status web page are planned. See
+> [docs/architecture.md](docs/architecture.md).
 
 ## How it works
 
@@ -216,6 +230,160 @@ aptwarden report --no-notify         # interactive run without mails
 If the relay greylists (Proxmox Mail Gateway does by default), whitelist the central
 host's address. Otherwise every alert is delayed and the first attempt fails.
 
+## Patching
+
+Patching is opt-in per host. aptwarden only patches a host when all of these hold:
+
+- its `policy.modes` contains `patch`,
+- the run is inside one of its maintenance windows,
+- it has healthchecks,
+- it has a snapshot provider (or an explicit `allow_without_snapshot: true`).
+
+### Flow
+
+| Step | What happens | On failure |
+|---|---|---|
+| plan | Select fixable findings allowed by the policy (`auto_patch_severities`, `auto_patch_kev`, not restricted by a definition), refresh the package lists and resolve the apt candidates. Every installed binary of an affected source package is upgraded together. A candidate must reach the fixed *source* version and must not be blocked by a definition. | `nothing-to-do` |
+| preflight | Helper reachable via sudo, snapshot feature available, healthchecks configured **and passing** | `aborted` |
+| simulate | `apt-get -s` with exactly the planned `package=version`s. Any removal, new package or upgrade outside the plan stops the run (`allow_new_packages`, `allow_extra_upgrades`). | `aborted` |
+| snapshot | Proxmox snapshot `aptw_<run-id>`, without RAM state by default | `aborted` |
+| apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg | rollback |
+| restart | needrestart `auto` / `list` / `off`; reboot `never` / `if-required` | rollback |
+| healthcheck | systemd units on the host; HTTP and TCP from the central host, with grace period and retries | rollback, or alert only with `rollback: manual` |
+
+The result is one of these statuses:
+
+| Status | Meaning | Alert |
+|---|---|---|
+| `patched` | upgraded and healthy | no (patch summary mail) |
+| `rolled-back` | failed, rolled back to the snapshot | **yes** |
+| `needs-manual-rollback` | failed, `rollback: manual`; run `aptwarden rollback --host …` | **yes** |
+| `failed` | failed without a snapshot to roll back to | **yes** |
+| `rollback-failed` | the rollback itself failed | **yes** |
+| `aborted` | stopped before any change | mail only if the reason is new |
+| `nothing-to-do`, `skipped`, `dry-run` | nothing changed | no |
+
+A rollback discards everything written after the snapshot, e.g. received mail or
+database writes. The window is minutes, but for mail and database hosts consider
+`rollback: manual`.
+
+### Target hosts: helper and sudo
+
+A sudoers rule on `apt-get` itself would be root for anyone who can pass options. Target
+hosts therefore get a small root-owned helper. It has fixed subcommands, validates every
+`package=version` and only upgrades installed packages. sudo allows this one script and
+nothing else:
+
+```sh
+# from a machine with aptwarden installed and root SSH access to the target
+ssh root@TARGET 'apt-get install -y sudo && install -d -m 755 /usr/local/lib/aptwarden'
+aptwarden helper show | ssh root@TARGET \
+    'install -m 755 -o root -g root /dev/stdin /usr/local/lib/aptwarden/aptwarden-helper'
+aptwarden helper show --sudoers | ssh root@TARGET \
+    'install -m 440 -o root -g root /dev/stdin /etc/sudoers.d/aptwarden && visudo -cf /etc/sudoers.d/aptwarden'
+# check as the aptwarden user: the helper works, anything else is refused
+ssh aptwarden@TARGET 'sudo -n /usr/local/lib/aptwarden/aptwarden-helper version; sudo -n id'
+```
+
+Install `needrestart` on the target if services should be restarted after library
+updates.
+
+### Proxmox API token
+
+Use a dedicated user and a pool containing only the guests aptwarden may snapshot. The
+token can do nothing else, so a test token can never touch production guests:
+
+```sh
+pveum role add AptwardenPatch --privs "VM.Audit,VM.Snapshot,VM.Snapshot.Rollback,VM.PowerMgmt"
+pveum pool add aptwarden-prod
+pveum pool modify aptwarden-prod --vms 101,102
+pveum user add aptwarden@pve --comment "aptwarden patch automation"   # @pve: no shell login
+pveum user token add aptwarden@pve central --privsep 1
+# privilege separation: the token gets the intersection, so grant both
+pveum acl modify /pool/aptwarden-prod --users aptwarden@pve --roles AptwardenPatch
+pveum acl modify /pool/aptwarden-prod --tokens 'aptwarden@pve!central' --roles AptwardenPatch
+```
+
+Store the secret (the `value` printed once) on the central host only:
+
+```sh
+install -d -m 750 -o root -g aptwarden /etc/aptwarden/credentials
+( umask 077; nano /etc/aptwarden/credentials/proxmox-token )
+chown aptwarden: /etc/aptwarden/credentials/proxmox-token
+```
+
+Get the API certificate fingerprint from *Node → System → Certificates*, or with
+`openssl s_client -connect PVE:8006 </dev/null | openssl x509 -noout -fingerprint -sha256`.
+Pin it after comparing it with the GUI.
+
+### Configuration
+
+```yaml
+proxmox:
+  url: https://192.0.2.9:8006
+  node: pve1
+  token_id: aptwarden@pve!central
+  token_file: credentials/proxmox-token        # relative to /etc/aptwarden
+  tls_fingerprint: "39:B8:6C:...:08:66"        # or ca_file for a CA-signed certificate
+
+snapshots:
+  keep: 7d                                     # aptwarden's own snapshots are deleted after this
+
+policy:                                        # defaults for every host
+  modes: [report]                              # add dry-run and/or patch per host
+  auto_patch_severities: [critical, high]
+  auto_patch_kev: true                         # KEV-listed: patch whatever the severity
+  restart: auto                                # needrestart: auto | list | off
+  reboot: never                                # never | if-required
+  rollback: auto                               # auto | manual
+
+hosts:
+  - name: proxy01
+    address: 192.0.2.10
+    snapshot: {provider: proxmox, vmid: 101, type: lxc}   # type: lxc | qemu
+    policy:
+      modes: [report, dry-run, patch]
+      window: ["Mon..Fri 02:00-04:00", "Sat 03:00-05:00"]  # local time of the central host
+    healthchecks:
+      - systemd: nginx.service
+      - http: https://proxy01.example.org/healthz
+        expect_status: 200
+      - tcp: 192.0.2.10:443
+  - name: mail01
+    address: 192.0.2.25
+    snapshot: {provider: proxmox, vmid: 102, type: lxc}
+    policy: {modes: [report, patch], rollback: manual, window: ["Sun 04:00-05:00"]}
+    healthchecks: [{systemd: postfix@-.service}, {tcp: "192.0.2.25:25"}]
+```
+
+### Commands
+
+```sh
+aptwarden patch --dry-run [--host H]   # plan + simulation, changes nothing (ignores windows)
+aptwarden patch [--host H]             # the real thing, inside the maintenance windows
+aptwarden patch --ignore-window        # ... outside them, deliberately
+aptwarden patches [--host H]           # patch history
+aptwarden rollback --host H            # roll back to the newest aptwarden snapshot (asks first)
+aptwarden snapshots list               # snapshots aptwarden created
+aptwarden snapshots cleanup [--dry-run]
+aptwarden hosts check                  # also checks helper/sudo, snapshots, healthchecks
+```
+
+The patch timer runs hourly. Each host is only patched inside its window:
+
+```sh
+cp contrib/systemd/aptwarden-patch.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now aptwarden-patch.timer
+```
+
+Mails from patch runs:
+
+- a patch summary when something was patched, or when a run aborted for a new reason
+- an immediate alert for anything that needs a human
+
+Quiet hours cause no mail.
+
 ## Usage
 
 ```
@@ -230,6 +398,11 @@ aptwarden sources refresh [--force]    update the cached feeds
 aptwarden config check [--dump]        validate (and print) the configuration
 aptwarden notify test                  send a test notification
 aptwarden defs sync | list | validate  custom definitions
+aptwarden patch [--dry-run]            patch (see Patching)
+aptwarden rollback --host H            roll back to aptwarden's snapshot
+aptwarden snapshots list | cleanup     aptwarden's snapshots
+aptwarden patches                      patch history
+aptwarden helper show [--sudoers]      the root helper for target hosts
 ```
 
 Example (shortened):
@@ -266,6 +439,8 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 | `/etc/aptwarden/config.yaml` | configuration |
 | `/var/lib/aptwarden/state.db` | run history, findings, first/last seen |
 | `/var/cache/aptwarden/cache.db` | feed cache, about 100 MB, safe to delete |
+| `/var/cache/aptwarden/definitions.git` | mirror of the definitions repository |
+| `/etc/aptwarden/credentials/` | secrets (Proxmox token, NVD key, SMTP password) |
 
 ## Known limitations
 
@@ -277,6 +452,10 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
   `fixable`.
 - **No CVSS v4 calculation yet:** v4-only CVEs need NVD for a score.
 - **Docker images are not scanned yet** (planned as a Trivy plugin).
+- **PVE nodes are report-only by design:** Proxmox requires `apt full-upgrade`, and
+  a node cannot snapshot itself.
+- **`enforce_block: pin` is not implemented yet:** blocked versions are never installed
+  by aptwarden, but manual `apt` runs are not prevented.
 
 ## Development
 
@@ -292,13 +471,25 @@ python3 -m venv --system-site-packages .venv
   `tools/gen_debversion_cases.py` regenerates the version comparison table with dpkg as
   the oracle.
 - **Integration tests** run against disposable hosts only. Never point them at
-  production:
+  production.
+  - **Inventory over SSH:**
 
-```sh
-APTWARDEN_IT_HOSTS="aptwarden@192.0.2.21,aptwarden@192.0.2.22" \
-APTWARDEN_IT_NETWORK=1 \
-    .venv/bin/pytest -m integration tests/integration
-```
+    ```sh
+    APTWARDEN_IT_HOSTS="aptwarden@192.0.2.21,aptwarden@192.0.2.22" \
+    APTWARDEN_IT_NETWORK=1 \
+        .venv/bin/pytest -m integration tests/integration/test_live_hosts.py
+    ```
+
+  - **Live patching** against Proxmox test guests: snapshot roundtrip, dry run, a real
+    patch with an injected healthcheck failure and the automatic rollback. Run it
+    where the config and the token are readable, e.g. on a test central host as the
+    aptwarden user. A guest is only used if its VMID is listed and Proxmox reports
+    its hostname as the configured host name:
+
+    ```sh
+    APTWARDEN_IT_CONFIG=/etc/aptwarden/config.yaml APTWARDEN_IT_VMIDS=139,140 \
+        python3 -m pytest -m integration -o addopts= tests/integration/test_patch_live.py
+    ```
 
 CI runs the unit tests on Python 3.11 to 3.13, and in `debian:12` and `debian:13`
 containers with Debian's packages only.
