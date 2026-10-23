@@ -38,7 +38,14 @@ def seed(state: State):
 
 
 def test_render(make_config, tmp_path):
-    cfg = make_config(hosts=[{"name": "web01"}, {"name": "db01"}, {"name": "new01"}])
+    cfg = make_config(hosts=[
+        {"name": "web01", "snapshot": {"provider": "proxmox", "vmid": 139, "type": "lxc"},
+         "policy": {"modes": ["report", "dry-run", "patch"], "window": ["Mon..Fri 03:00-04:00"],
+                    "rollback": "manual"},
+         "healthchecks": [{"systemd": "nginx.service"}]},
+        {"name": "db01"}, {"name": "new01"}],
+        proxmox={"url": "https://192.0.2.9:8006", "node": "pve", "token_id": "a@pve!t",
+                 "token_file": "t"})
     state = State(cfg.state_dir / "state.db")
     seed(state)
     page = statuspage.render(cfg, state)
@@ -60,6 +67,14 @@ def test_render(make_config, tmp_path):
     assert "reboot required" in page
     assert "https://security-tracker.debian.org/tracker/CVE-2026-24061" in page
     assert "CVE-2026-3" in page  # not fixable, above the threshold
+    # modes and policy, with where they come from
+    assert '<td><span class="badge good">patch</span></td>' in page
+    assert '<td><span class="muted">report only</span></td>' in page
+    assert ("policy: modes report, dry-run, patch · window Mon..Fri 03:00-04:00 · auto-patch "
+            "critical, high + KEV · rollback manual · restart auto · reboot never · snapshot "
+            "proxmox lxc 139 · 1 healthchecks") in page
+    assert "policy: modes report</p>" in page
+    assert "configuration at the time this page was generated" in page
 
 
 def test_write_atomic_with_mode(make_config):

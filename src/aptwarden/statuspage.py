@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from aptwarden import __version__
-from aptwarden.config import Config
+from aptwarden.config import Config, HostConfig
 from aptwarden.models import Finding, FindingStatus, Severity
 from aptwarden.report import group_findings, truncate
 from aptwarden.state import HostRecord, State
@@ -109,8 +109,40 @@ def _finding_rows(findings: list[Finding], fixed_column: bool) -> str:
     return "".join(rows)
 
 
+def _modes_badges(host: HostConfig | None) -> str:
+    if host is None:
+        return '<span class="muted">not configured</span>'
+    modes = host.policy["modes"]
+    if "patch" in modes:
+        return '<span class="badge good">patch</span>'
+    if "dry-run" in modes:
+        return '<span class="badge muted">dry-run</span>'
+    return '<span class="muted">report only</span>'
+
+
+def _policy_line(host: HostConfig | None) -> str:
+    if host is None:
+        return '<p class="muted">no longer in the configuration</p>'
+    p = host.policy
+    snap = host.snapshot
+    snapshot = (f"proxmox {snap.get('type', '')} {snap.get('vmid', '')}"
+                if snap["provider"] == "proxmox" else "none")
+    items = [
+        f"modes {', '.join(p['modes']) or '-'}",
+        f"window {', '.join(p['window']) or 'any time'}",
+        f"auto-patch {', '.join(p['auto_patch_severities'])}"
+        + (" + KEV" if p["auto_patch_kev"] else ""),
+        f"rollback {p['rollback']}", f"restart {p['restart']}", f"reboot {p['reboot']}",
+        f"snapshot {snapshot}", f"{len(host.healthchecks)} healthchecks",
+    ]
+    if "patch" not in p["modes"] and "dry-run" not in p["modes"]:
+        items = items[:1]  # the rest only matters for patching
+    return f'<p class="muted">policy: {_e(" · ".join(items))}</p>'
+
+
 def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict],
-                  snapshots: list[dict], min_severity: Severity) -> str:
+                  snapshots: list[dict], min_severity: Severity,
+                  host: HostConfig | None = None) -> str:
     s = rec.summary
     fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
     others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
@@ -123,6 +155,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     parts += [f'<p class="warn">⚠ {_e(w)}</p>' for w in rec.warnings]
     parts.append(f'<p class="muted">scanned {_ts(rec.scanned_at)} · '
                  f'{_e(s.get("package_count", 0))} packages</p>')
+    parts.append(_policy_line(host))
 
     if fixable:
         parts.append('<h3>Fixable now</h3><div class="wrap"><table><tr><th>Severity</th>'
@@ -189,6 +222,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
             last_run = latest.run_id
         records.append((good or latest, error))
 
+    by_name = {h.name: h for h in cfg.hosts}
     total = Counter()
     rows = []
     for rec, error in records:
@@ -200,7 +234,8 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
                      high=sev[Severity.HIGH], kev=kev, errors=1 if error else 0)
         status = ('<span class="badge bad">scan failed</span>' if error
                   else '<span class="badge good">ok</span>')
-        rows.append(f'<tr><td><a href="#{_e(rec.host)}">{_e(rec.host)}</a></td><td>{status}</td>'
+        rows.append(f'<tr><td><a href="#{_e(rec.host)}">{_e(rec.host)}</a></td>'
+                    f"<td>{_modes_badges(by_name.get(rec.host))}</td><td>{status}</td>"
                     f'<td class="num">{len(fixable)}</td>'
                     f'<td class="num critical">{sev[Severity.CRITICAL] or ""}</td>'
                     f'<td class="num high">{sev[Severity.HIGH] or ""}</td>'
@@ -237,7 +272,8 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
                     ])
     hosts_html = "".join(
         _host_section(rec, error, state.patches(rec.host, 5),
-                      state.snapshots(rec.host, ("active", "rolled-back")), min_severity)
+                      state.snapshots(rec.host, ("active", "rolled-back")), min_severity,
+                      by_name.get(rec.host))
         for rec, error in records)
     missing_html = (f'<p class="muted">not scanned yet: {_e(", ".join(missing))}</p>'
                     if missing else "")
@@ -259,10 +295,13 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
 <div class="tiles">{tiles}</div>
 <h2>Hosts</h2>
 <div class="wrap"><table>
-<tr><th>Host</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
+<tr><th>Host</th><th>Modes</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
 <th>Scanned</th><th>Last patch</th></tr>
 {"".join(rows)}
 </table></div>
+<p class="muted">Modes and policy: configuration at the time this page was generated
+({_e(now.strftime("%Y-%m-%d %H:%M UTC"))}). Configuration changes appear after the next
+report or patch run.</p>
 {missing_html}
 {sources_html}
 <h2>Host details</h2>
