@@ -52,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     hsub = p.add_subparsers(dest="hosts_command", metavar="SUBCOMMAND", required=True)
     hc = hsub.add_parser("check", help="test connectivity and inventory collection")
     hc.add_argument("--host", action="append", metavar="NAME")
+    hc.add_argument("--accept-new", action="store_true",
+                    help="record the SSH host key of hosts not yet in known_hosts (trust on "
+                         "first use; changed keys are still refused) and print it for checking")
 
     p = sub.add_parser("sources", help="vulnerability data sources")
     ssub = p.add_subparsers(dest="sources_command", metavar="SUBCOMMAND", required=True)
@@ -229,6 +232,18 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
     from aptwarden.runner import Runner
 
     hosts = cfg.select_hosts(args.host)
+    unknown: set[str] = set()
+    if args.accept_new:
+        from dataclasses import replace
+
+        from aptwarden.transport import known_host_keys
+
+        for h in hosts:
+            if h.transport == "ssh" and not known_host_keys(h.address, h.ssh.port,
+                                                            h.ssh.known_hosts_file):
+                unknown.add(h.name)
+                # only for this check; regular runs keep the configured strict mode
+                h.ssh = replace(h.ssh, strict_host_key_checking="accept-new")
     runner = Runner(cfg, offline=True)
     try:
         tracker = next((s for s in runner.sources if s.name == "debian_tracker"), None)
@@ -259,6 +274,22 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
         rows.append([h.name, h.address, "ok", f"{r.debian_version} ({r.codename})",
                      str(len(r.packages)), ", ".join(notes)])
     print("\n".join(report.format_table(rows, indent="")))
+    if args.accept_new:
+        from aptwarden.transport import known_host_keys
+
+        for h in hosts:
+            if h.name not in unknown:
+                continue
+            keys = known_host_keys(h.address, h.ssh.port, h.ssh.known_hosts_file)
+            if keys:
+                print(f"{h.name}: new host key recorded: {', '.join(keys)}")
+            else:
+                print(f"{h.name}: no host key recorded (host not reachable?)")
+        if unknown:
+            print("Compare with the host's own fingerprint: "
+                  "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub")
+        else:
+            print("all selected hosts were already in known_hosts, nothing recorded")
     return EXIT_PROBLEM if failed else EXIT_OK
 
 

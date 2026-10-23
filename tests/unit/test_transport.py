@@ -69,3 +69,23 @@ def test_local_transport():
         r.check()
     # like over SSH, a missing command is a failed command, not a transport error
     assert t.run(["/nonexistent/binary"]).returncode == 127
+
+
+@pytest.mark.skipif(not __import__("shutil").which("ssh-keygen"), reason="needs ssh-keygen")
+def test_known_host_keys(tmp_path):
+    import subprocess
+
+    from aptwarden.transport import known_host_keys
+
+    key = tmp_path / "hostkey"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
+    pub = (tmp_path / "hostkey.pub").read_text().split()
+    kh = tmp_path / "known_hosts"
+    kh.write_text(f"192.0.2.10 {pub[0]} {pub[1]}\n[192.0.2.11]:2222 {pub[0]} {pub[1]}\n")
+    subprocess.run(["ssh-keygen", "-H", "-f", str(kh)], check=True, capture_output=True)  # hash
+    fp = subprocess.run(["ssh-keygen", "-lf", str(tmp_path / "hostkey.pub")], check=True,
+                        capture_output=True, text=True).stdout.split()[1]
+    assert known_host_keys("192.0.2.10", 22, str(kh)) == [f"{fp} (ED25519)"]
+    assert known_host_keys("192.0.2.11", 2222, str(kh)) == [f"{fp} (ED25519)"]
+    assert known_host_keys("192.0.2.11", 22, str(kh)) == []
+    assert known_host_keys("192.0.2.99", 22, str(kh)) == []

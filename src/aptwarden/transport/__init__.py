@@ -135,6 +135,26 @@ class SshTransport(Transport):
         )
 
 
+def known_host_keys(address: str, port: int, known_hosts_file: str | None) -> list[str]:
+    """Fingerprints recorded for a host in known_hosts (hashed entries included),
+    e.g. ["SHA256:abc... (ED25519)"]. Empty if the host is unknown."""
+    name = address if port == 22 else f"[{address}]:{port}"
+    cmd = ["ssh-keygen", "-l", "-F", name]
+    if known_hosts_file:
+        cmd += ["-f", known_hosts_file]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    keys = []
+    for line in p.stdout.splitlines():  # "<host> <TYPE> <fingerprint>"
+        parts = line.split()
+        if line.startswith("#") or len(parts) < 3:
+            continue
+        keys.append(f"{parts[2]} ({parts[1]})")
+    return keys
+
+
 class TransportFactory:
     """Creates transports and owns the directory for SSH control sockets."""
 

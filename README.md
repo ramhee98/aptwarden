@@ -101,17 +101,19 @@ chmod 600 ~aptwarden/.ssh/authorized_keys
 
 ### Host keys
 
-Before the first run, check the hosts' key fingerprints. There are two ways to fill
-`known_hosts`:
-
-- Pre-populate `/var/lib/aptwarden/known_hosts` (for example with `ssh-keyscan`, after
-  checking the fingerprints).
-- Run the first `hosts check` with `strict_host_key_checking: accept-new`, then switch
-  back to `yes`.
+Regular runs use `strict_host_key_checking: yes`: an unknown or changed host key stops
+the connection. To record the key of a new host once, use `--accept-new`. It applies
+only to hosts not yet in `known_hosts`, and a changed key is still refused:
 
 ```sh
-runuser -u aptwarden -- aptwarden hosts check
+runuser -u aptwarden -- aptwarden hosts check --accept-new --host mail01
+# mail01: new host key recorded: SHA256:Fmls... (ED25519)
 ```
+
+Compare the printed fingerprint with the host's own fingerprint
+(`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host). Alternatively,
+pre-populate `/var/lib/aptwarden/known_hosts` with `ssh-keyscan` after checking the
+fingerprints.
 
 ### Timer
 
@@ -432,7 +434,7 @@ aptwarden report --format json         complete machine-readable result
 aptwarden report --offline             no network for vulnerability data, cache only
 aptwarden status                       latest stored results, no scanning
 aptwarden status --format html         the status page on stdout
-aptwarden hosts check                  connectivity and inventory test
+aptwarden hosts check [--accept-new]   connectivity and inventory test
 aptwarden sources refresh [--force]    update the cached feeds
 aptwarden config check [--dump]        validate (and print) the configuration
 aptwarden notify test                  send a test notification

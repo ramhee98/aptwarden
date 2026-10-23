@@ -205,3 +205,28 @@ def test_report_writes_status_page(setup):
     runner.close()
     page = (cfg.state_dir / "www" / "index.html").read_text()
     assert "CVE-2026-24061" in page and "web01" in page
+
+
+def test_hosts_check_accept_new_only_for_unknown_hosts(setup, tmp_path, monkeypatch, capsys):
+    cfg, http, factory = setup
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(json.dumps(cfg.raw))
+    monkeypatch.setattr("aptwarden.runner.TransportFactory", lambda: factory)
+    known = {"192.0.2.10": [], "192.0.2.20": ["SHA256:old (ED25519)"]}
+    seen = {}
+    monkeypatch.setattr("aptwarden.transport.known_host_keys",
+                        lambda addr, port, f: known[addr])
+
+    real_collect = Runner.collect
+
+    def collect(self, hosts):
+        seen.update({h.name: h.ssh.strict_host_key_checking for h in hosts})
+        known["192.0.2.10"] = ["SHA256:new (ED25519)"]  # ssh recorded it
+        return real_collect(self, hosts)
+
+    monkeypatch.setattr(Runner, "collect", collect)
+    cli.main(["-c", str(config_file), "-q", "hosts", "check", "--accept-new"])
+    out = capsys.readouterr().out
+    assert seen == {"web01": "accept-new", "db01": "yes"}  # known host stays strict
+    assert "web01: new host key recorded: SHA256:new (ED25519)" in out
+    assert "db01" not in out.split("new host key")[0].splitlines()[-1]
