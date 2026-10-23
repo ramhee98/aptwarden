@@ -305,7 +305,7 @@ def test_snapshot_not_supported_aborts(state):
 
 def test_helper_missing_aborts(state):
     result, _ = run(state, openssl_host(helper_ok=False))
-    assert result.status == "aborted" and "not usable via sudo" in result.reason
+    assert result.status == "aborted" and "no sudo rule for the helper" in result.reason
 
 
 def test_candidate_must_reach_fixed_version(state):
@@ -387,3 +387,23 @@ def test_manual_rollback(state):
         host_config(), ScriptedTransport(h), provider, ref, "r2")
     assert out.status == "rolled-back" and h.installed["openssl"] == "3.5.1-1"
     assert state.snapshots("web01", state=None)[0]["state"] == "rolled-back"
+
+
+# real messages captured from a Debian 13 host
+@pytest.mark.parametrize("stdout, stderr, expected", [
+    ("aptwarden-helper 1\n", "", None),
+    ("", "env: ‘sudo’: No such file or directory", "sudo is not installed"),
+    ("", "sudo: a password is required", "no sudo rule for the helper"),
+    ("", f"sudo: {HELPER}: command not found", "the helper is not installed at"),
+    ("aptwarden-helper 0\n", "", "outdated helper (aptwarden-helper 0"),
+    ("", "ssh_exchange_identification: boom", "helper not usable via sudo (ssh_"),
+])
+def test_explain_helper_failure(stdout, stderr, expected):
+    from aptwarden.patch.runner import explain_helper_failure
+
+    r = CommandResult(["sudo"], 0 if stdout else 1, stdout, stderr)
+    msg = explain_helper_failure(r, HELPER)
+    if expected is None:
+        assert msg is None
+    else:
+        assert expected in msg and "see README" in msg

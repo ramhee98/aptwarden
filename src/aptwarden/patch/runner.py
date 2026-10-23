@@ -45,6 +45,32 @@ CHANGED_STATUSES = frozenset({"patched", "rolled-back", "needs-manual-rollback",
                               "rollback-failed"})
 
 
+HELPER_HINT = "see README: Target hosts: helper and sudo"
+
+
+def explain_helper_failure(r, helper: str) -> str | None:
+    """None if ``sudo -n <helper> version`` worked, else what is wrong."""
+    out = r.stdout.strip()
+    if out == f"aptwarden-helper {HELPER_VERSION}":
+        return None
+    raw = (r.stderr or r.stdout).strip()
+    if out.startswith("aptwarden-helper "):
+        reason = (f"outdated helper ({out}, expected version {HELPER_VERSION}): reinstall it "
+                  f"from 'aptwarden helper show'")
+    elif "'sudo': No such file" in raw or "‘sudo’: No such file" in raw or (
+            "sudo" in raw and "not found" in raw and helper not in raw):
+        reason = "sudo is not installed on the host"
+    elif helper in raw and ("not found" in raw or "No such file" in raw):
+        reason = f"the helper is not installed at {helper}"
+    elif "password is required" in raw or "not allowed" in raw or "sudoers" in raw:
+        reason = ("no sudo rule for the helper: /etc/sudoers.d/aptwarden is missing, has a "
+                  "wrong mode, or its file name contains a '.' (then sudo ignores it); "
+                  f"or the helper is not at {helper}")
+    else:
+        reason = f"helper not usable via sudo ({raw or 'no output'})"
+    return f"{reason}; {HELPER_HINT}"
+
+
 class PatchAbort(Exception):
     """Stop before anything was changed."""
 
@@ -155,9 +181,8 @@ class PatchRunner:
 
         result.stage = "preflight"
         r = self._helper(t, host, "version", timeout=30)
-        if r.stdout.strip() != f"aptwarden-helper {HELPER_VERSION}":
-            raise PatchAbort(f"aptwarden-helper {HELPER_VERSION} not usable via sudo "
-                             f"({(r.stderr or r.stdout).strip() or 'no output'})")
+        if problem := explain_helper_failure(r, host.ssh.helper):
+            raise PatchAbort(problem)
         if not result.dry_run and not host.healthchecks:
             raise PatchAbort("no healthchecks configured; auto-patching requires them")
         snapshots = not isinstance(provider, NoSnapshots)

@@ -190,7 +190,7 @@ def cmd_status(args, cfg: config.Config) -> int:
 
 def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[str]:
     """Problems that would stop patching this host."""
-    from aptwarden.patch.runner import HELPER_VERSION
+    from aptwarden.patch.runner import explain_helper_failure
     from aptwarden.runner import Runner
     from aptwarden.snapshot import SnapshotError
     from aptwarden.transport import TransportError, TransportFactory
@@ -201,9 +201,9 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
         t = factory.create(h)
         try:
             r = t.run(["sudo", "-n", h.ssh.helper, "version"], timeout=30)
-            if r.stdout.strip() != f"aptwarden-helper {HELPER_VERSION}":
-                notes.append("helper/sudo NOT ready: " + ((r.stderr or r.stdout).strip()
-                                                          or f"exit {r.returncode}")[:80])
+            problem = explain_helper_failure(r, h.ssh.helper)
+            if problem:
+                notes.append("helper NOT ready: " + problem.split("; see README")[0])
             else:
                 notes.append("helper ok")
         except TransportError as e:
