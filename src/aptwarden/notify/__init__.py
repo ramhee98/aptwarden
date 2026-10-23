@@ -272,6 +272,9 @@ class Dispatcher:
                 errors.append(f"{n.name}: {e}")
                 log.error("notification failed", extra={"notifier": n.name, "kind": msg.kind,
                                                         "error": str(e)})
+            except Exception as e:  # noqa: BLE001 - a notifier bug must not abort the run
+                errors.append(f"{n.name}: unexpected error: {e!r}")
+                log.exception("notifier crashed", extra={"notifier": n.name, "kind": msg.kind})
         return errors
 
     def dispatch(self, run: RunReport) -> list[str]:

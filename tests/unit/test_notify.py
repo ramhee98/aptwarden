@@ -291,3 +291,57 @@ def test_state_migration_from_v1(tmp_path):
     assert state.alert_due("web01", [f("CVE-1")], 0) != []
     state.mark_alerted("web01", [f("CVE-1")])
     assert state.alert_due("web01", [f("CVE-1")], 0) == []
+
+
+def test_starttls_without_server_name_uses_connect_host(monkeypatch):
+    # regression: smtplib leaves _host empty when connect() is called later
+    seen = {}
+    monkeypatch.setattr(smtplib.SMTP, "connect", lambda self, host, port, source_address=None: (220, b"ok"))
+    monkeypatch.setattr(smtplib.SMTP, "starttls",
+                        lambda self, *a, **kw: seen.setdefault("host", self._host))
+    conn = email_mod._SMTP()
+    conn.connect("192.0.2.25", 25)
+    conn.starttls()
+    assert seen["host"] == "192.0.2.25"
+
+
+def test_real_starttls_handshake_gets_a_server_name(tmp_path):
+    # end to end with Python's ssl: an empty server name raised ValueError before
+    import socket as socketlib
+    import threading
+
+    srv = socketlib.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def server():
+        c, _ = srv.accept()
+        f = c.makefile("rwb")
+        for expect_line, reply in ((False, b"220 test\r\n"),
+                                   (True, b"250-test\r\n250 STARTTLS\r\n"),
+                                   (True, b"220 go\r\n")):
+            if expect_line:
+                f.readline()
+            f.write(reply)
+            f.flush()
+        c.close()  # no TLS: the client must fail with an SSL/OS error, not ValueError
+
+    threading.Thread(target=server, daemon=True).start()
+    cfg = {**EMAIL, "host": "127.0.0.1", "port": port, "tls_server_name": None}
+    with pytest.raises(NotifyError):
+        EmailNotifier(cfg).send(Message("test", "s", "b"))
+    srv.close()
+
+
+def test_crashing_notifier_does_not_abort(dispatcher):
+    d, _, _ = dispatcher
+
+    class Crash(Notifier):
+        name = "crash"
+
+        def send(self, msg):
+            raise RuntimeError("boom")
+
+    d.notifiers = [Crash()]
+    assert "unexpected error" in d.send(Message("test", "s", "b"))[0]

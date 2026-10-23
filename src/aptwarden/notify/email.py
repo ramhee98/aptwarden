@@ -14,10 +14,16 @@ from aptwarden.notify import Message, Notifier, NotifyError
 
 
 class _SMTP(smtplib.SMTP):
-    """smtplib verifies the certificate against the connect address. When that
-    is an IP, ``server_name`` supplies the name to verify against instead."""
+    """STARTTLS verifies the certificate against ``server_name`` if set (for a
+    relay addressed by IP), else against the connect address. smtplib only
+    records the host when it is passed to the constructor, so connect() does
+    it here; otherwise the TLS handshake would get an empty server name."""
 
     server_name: str | None = None
+
+    def connect(self, host="localhost", port=0, source_address=None):
+        self._host = host
+        return super().connect(host, port, source_address)
 
     def starttls(self, *args, **kwargs):
         if self.server_name:
@@ -94,12 +100,17 @@ class EmailNotifier(Notifier):
             raise
         except ConfigError as e:
             raise NotifyError(str(e)) from e
+        except ssl.SSLCertVerificationError as e:
+            hint = "" if s.get("tls_server_name") else (
+                " (if the relay is addressed by IP, set notify.email.tls_server_name to the "
+                "name in its certificate)")
+            raise NotifyError(f"smtp {s['host']}:{s['port']}: {e.verify_message}{hint}") from e
         except smtplib.SMTPRecipientsRefused as e:
             raise NotifyError(_refused_text(e.recipients)) from e
         except smtplib.SMTPResponseException as e:
             raise NotifyError(f"smtp {s['host']}:{s['port']}: {e.smtp_code} "
                               f"{_decode(e.smtp_error)}") from e
-        except (smtplib.SMTPException, OSError) as e:
+        except (smtplib.SMTPException, OSError, ValueError) as e:
             raise NotifyError(f"smtp {s['host']}:{s['port']}: {e}") from e
         if refused:
             raise NotifyError(_refused_text(refused))
