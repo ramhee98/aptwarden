@@ -36,6 +36,7 @@ healthcheck and rollback.
 | `matcher` | Merges findings from all sources per (host, source package, vulnerability); precedence custom > debian_tracker > osv; drops `not-affected` |
 | `state` | SQLite: runs, per-host results, findings, first-seen tracking |
 | `report` | Text and JSON output |
+| `statuspage` | Static read-only HTML page from state.db, written after every run |
 | `cli` | `report`, `status`, `patch`, `rollback`, `snapshots`, `patches`, `defs`, `notify test`, `hosts check`, `helper show`, ... |
 | `notify` | Run summary and de-duplicated immediate alerts; e-mail notifier, webhooks pluggable |
 | `definitions` | Custom definitions: schema, validation, signed-tag Git sync |
@@ -303,4 +304,4 @@ from systemd credentials (`*_file` keys) and never stored inline. On the target 
 4. Patching: helper, simulation checks, Proxmox snapshots, healthchecks,
    needrestart/reboot, automatic rollback, cleanup, maintenance windows, live
    integration tests.
-5. Later: Trivy plugin for Docker images, small status web page.
+5. Static status page (done). Later: Trivy plugin for Docker images.

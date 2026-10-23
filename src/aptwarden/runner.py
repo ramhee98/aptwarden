@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from aptwarden import inventory
+from aptwarden import inventory, statuspage
 from aptwarden import log as aplog
 from aptwarden.cache import Cache
 from aptwarden.config import Config, HostConfig, parse_duration
@@ -158,6 +158,7 @@ class Runner:
                 "patches": [{"host": p.host, "status": p.status} for p in run.patches],
             })
             self.state.prune(self.cfg.keep_runs)
+            statuspage.write(self.cfg, self.state)
             aplog.run_id_var.reset(token)
         return run
 

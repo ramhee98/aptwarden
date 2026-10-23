@@ -14,10 +14,11 @@ from aptwarden.sources import SourceStatus
 EXIT_OK, EXIT_PROBLEM, EXIT_USAGE = 0, 1, 2
 
 
-def _add_output_args(p: argparse.ArgumentParser) -> None:
+def _add_output_args(p: argparse.ArgumentParser, formats=("text", "json")) -> None:
     p.add_argument("--host", action="append", metavar="NAME",
                    help="limit to this host (repeatable)")
-    p.add_argument("--format", choices=["text", "json"], default="text")
+    p.add_argument("--format", choices=list(formats), default="text",
+                   help="html: render the status page to stdout" if "html" in formats else None)
     p.add_argument("--min-severity", choices=[str(s) for s in Severity],
                    help="hide packages below this severity (text output)")
     p.add_argument("--all", action="store_true",
@@ -45,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="do not send notifications for this run")
 
     p = sub.add_parser("status", help="show the latest stored results (no scanning)")
-    _add_output_args(p)
+    _add_output_args(p, formats=("text", "json", "html"))
 
     p = sub.add_parser("hosts", help="host management")
     hsub = p.add_subparsers(dest="hosts_command", metavar="SUBCOMMAND", required=True)
@@ -144,6 +145,14 @@ def cmd_status(args, cfg: config.Config) -> int:
     from aptwarden.state import State
 
     state = State(cfg.state_dir / "state.db")
+    if args.format == "html":
+        from aptwarden import statuspage
+
+        try:
+            sys.stdout.write(statuspage.render(cfg, state))
+        finally:
+            state.close()
+        return EXIT_OK
     records = []
     last_run = None
     try:

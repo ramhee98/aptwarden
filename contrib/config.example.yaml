@@ -75,6 +75,11 @@ notify:
     to: [admin@example.org]
     timeout: 30
 
+status_page:                       # static HTML page, rewritten after every run
+  enabled: true
+  path: null                       # default: <state_dir>/www/index.html
+  mode: "0640"
+
 proxmox:                           # needed for snapshot provider proxmox
   url: https://192.0.2.9:8006
   node: pve1

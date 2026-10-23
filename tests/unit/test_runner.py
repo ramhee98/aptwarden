@@ -196,3 +196,12 @@ def test_cli_defs_validate_needs_no_config(tmp_path, capsys, monkeypatch):
     assert "1 valid definitions, 0 errors" in capsys.readouterr().out
     (tmp_path / "defs" / "AW-2026-0002.yaml").write_text(VALID)  # id/file name mismatch
     assert cli.main(["defs", "validate", str(tmp_path / "defs")]) == 1
+
+
+def test_report_writes_status_page(setup):
+    cfg, http, factory = setup
+    runner = Runner(cfg, http=http, transports=factory)
+    runner.report(cfg.select_hosts(["web01"]), notify=False)
+    runner.close()
+    page = (cfg.state_dir / "www" / "index.html").read_text()
+    assert "CVE-2026-24061" in page and "web01" in page

@@ -384,6 +384,40 @@ Mails from patch runs:
 
 Quiet hours cause no mail.
 
+## Status page
+
+After every `report` and `patch` run, aptwarden writes a static, read-only HTML page:
+`/var/lib/aptwarden/www/index.html` by default. It contains:
+
+- totals and a table of all hosts (fixable, critical, high, KEV, last scan, last
+  patch)
+- per host: the fixable packages, every vulnerability (collapsible), the patch history
+  and aptwarden's snapshots
+- the state of the data sources and definitions, including rejected releases
+
+The page is always rendered from the stored state of every configured host, so a patch
+run of one host does not hide the others. It has no JavaScript and no forms. A
+Content-Security-Policy forbids scripts and external resources, and all external text
+(CVE descriptions etc.) is escaped. aptwarden itself runs no web server.
+
+To publish the page, serve the file with your existing web server, behind
+authentication or LAN-only. The page lists the vulnerabilities of your hosts. For
+example, copy it to the reverse proxy:
+
+```sh
+# on the central host, e.g. from a systemd path unit or cron
+rsync /var/lib/aptwarden/www/index.html proxy:/var/www/aptwarden/
+```
+
+```yaml
+status_page:
+  enabled: true          # default
+  path: null             # default: <state_dir>/www/index.html
+  mode: "0640"           # e.g. "0644" if another local user serves it
+```
+
+`aptwarden status --format html` prints the page to stdout.
+
 ## Usage
 
 ```
@@ -393,6 +427,7 @@ aptwarden report --all                 include vulnerabilities without an availa
 aptwarden report --format json         complete machine-readable result
 aptwarden report --offline             no network for vulnerability data, cache only
 aptwarden status                       latest stored results, no scanning
+aptwarden status --format html         the status page on stdout
 aptwarden hosts check                  connectivity and inventory test
 aptwarden sources refresh [--force]    update the cached feeds
 aptwarden config check [--dump]        validate (and print) the configuration
@@ -438,6 +473,7 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 |---|---|
 | `/etc/aptwarden/config.yaml` | configuration |
 | `/var/lib/aptwarden/state.db` | run history, findings, first/last seen |
+| `/var/lib/aptwarden/www/index.html` | static status page |
 | `/var/cache/aptwarden/cache.db` | feed cache, about 100 MB, safe to delete |
 | `/var/cache/aptwarden/definitions.git` | mirror of the definitions repository |
 | `/etc/aptwarden/credentials/` | secrets (Proxmox token, NVD key, SMTP password) |

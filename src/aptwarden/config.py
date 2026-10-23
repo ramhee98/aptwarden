@@ -48,6 +48,7 @@ DEFAULTS: dict = {
     },
     "health": {"grace": "10s", "retries": 6, "interval": "5s"},
     "snapshots": {"keep": "7d", "vmstate": False},
+    "status_page": {"enabled": True, "path": None, "mode": "0640"},
     "sources": {
         "debian_tracker": {
             "enabled": True,
@@ -271,6 +272,7 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
     base = path.parent if path else Path.cwd()
     for section in ("state_dir", "cache_dir"):
         merged[section] = _resolve(merged[section], base)
+    merged["status_page"]["path"] = _resolve(merged["status_page"]["path"], base)
     # Validate every duration early so typos fail at load time, not mid-run.
     for section in (merged["sources"], merged["enrich"], merged["notify"], merged["health"],
                     merged["snapshots"]):

@@ -390,6 +390,28 @@
           "minimum": 10
         }
       }
+    },
+    "status_page": {
+      "description": "Static HTML status page, rewritten after every report and patch run",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Output file (default: <state_dir>/www/index.html)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "description": "File mode, octal string",
+          "type": "string",
+          "pattern": "^0?[0-7]{3}$"
+        }
+      }
     }
   },
   "$defs": {
