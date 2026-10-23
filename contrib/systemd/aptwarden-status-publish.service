@@ -1,0 +1,37 @@
+[Unit]
+Description=Copy the aptwarden status page to the web server
+Documentation=https://github.com/ramhee98/aptwarden
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=aptwarden
+Group=aptwarden
+# PUBLISH_TARGET=aptwarden-publish@proxy.example.org (see contrib/publish/README.md)
+EnvironmentFile=/etc/aptwarden/publish.env
+# The destination directory is fixed on the web server by rrsync. Target the
+# directory ("host:"), not "host:index.html": replacing an existing file by name
+# fails behind rrsync with rsync 3.5 ("could not make way for new regular file").
+ExecStart=/usr/bin/rsync --chmod=F0644 --timeout=60 \
+    -e "ssh -i /etc/aptwarden/ssh/publish_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=/var/lib/aptwarden/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
+    /var/lib/aptwarden/www/index.html ${PUBLISH_TARGET}:
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

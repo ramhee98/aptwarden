@@ -400,14 +400,16 @@ run of one host does not hide the others. It has no JavaScript and no forms. A
 Content-Security-Policy forbids scripts and external resources, and all external text
 (CVE descriptions etc.) is escaped. aptwarden itself runs no web server.
 
-To publish the page, serve the file with your existing web server, behind
-authentication or LAN-only. The page lists the vulnerabilities of your hosts. For
-example, copy it to the reverse proxy:
+To publish the page, use your existing web server, LAN-only and with a password: the
+page lists your hosts' open vulnerabilities. [contrib/publish/](contrib/publish/README.md)
+contains a complete setup:
 
-```sh
-# on the central host, e.g. from a systemd path unit or cron
-rsync /var/lib/aptwarden/www/index.html proxy:/var/www/aptwarden/
-```
+- **Push on change:** a systemd path unit on the central host pushes the page whenever
+  it changes, over SSH with a dedicated key.
+- **Restricted key:** on the web server, `rrsync -wo` limits the key to writing into
+  one directory. The web server gets no access to the central host.
+- **nginx location:** `satisfy all` with an IP allowlist, Basic Auth and the same CSP
+  as the page.
 
 ```yaml
 status_page:

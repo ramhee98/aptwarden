@@ -1,0 +1,9 @@
+[Unit]
+Description=Publish the aptwarden status page whenever it changes
+
+[Path]
+# aptwarden replaces the file atomically (rename), which triggers this.
+PathChanged=/var/lib/aptwarden/www/index.html
+
+[Install]
+WantedBy=paths.target
