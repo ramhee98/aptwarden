@@ -407,3 +407,13 @@ def test_explain_helper_failure(stdout, stderr, expected):
         assert msg is None
     else:
         assert expected in msg and "see README" in msg
+
+
+def test_no_newer_candidate_explains_versions(state):
+    h = openssl_host()
+    h.candidates = dict(h.installed)  # apt has nothing newer
+    result, _ = run(state, h)
+    assert result.status == "nothing-to-do"
+    reason = result.skipped_items[0]["skipped"]
+    assert "installed 3.5.1-1, fix needs 3.5.4-1" in reason
+    assert "candidate 3.5.1-1" in reason and "security missing" in reason

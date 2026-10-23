@@ -108,7 +108,13 @@ def resolve(item: PlanItem, candidates: dict[str, str | None],
         if cand and cand != installed.get(binary):
             targets[binary] = cand
     if not targets:
-        item.skipped = "no newer candidate version in the host's apt sources"
+        cands = sorted({c for b in item.binaries
+                        if (c := candidates.get(b) or candidates.get(base_name(b)))})
+        item.skipped = (f"installed {item.installed_version}, fix needs {item.fixed_version}, "
+                        f"but the host's apt sources offer nothing newer"
+                        + (f" (candidate {', '.join(cands)})" if cands else "")
+                        + ": mirror behind, *-security missing, or fix only in a point "
+                          "release")
         return
     source_versions = set()
     for binary, cand in targets.items():
