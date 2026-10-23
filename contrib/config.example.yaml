@@ -112,24 +112,66 @@ health:                            # timing of the post-patch healthchecks
   interval: 5s
 
 hosts:
-  - name: proxy01
+  # A simple web service in an LXC container: the typical auto-patch candidate.
+  - name: web01
     address: 192.0.2.10
     snapshot: {provider: proxmox, vmid: 101, type: lxc}
     policy:
       modes: [report, dry-run, patch]
       window: ["Mon..Fri 02:00-04:00"]
     healthchecks:
-      - systemd: nginx.service
-      - http: https://proxy01.example.org/healthz
-        expect_status: 200       # or a list
-        contains: "ok"           # optional
+      - systemd: apache2.service
+      - http: https://web01.example.org/
+        expect_status: [200, 301, 302]
         verify_tls: true
-      - tcp: 192.0.2.10:443
-  - name: mail01
-    address: mail01.example.org
-    ssh: {port: 2222}
+
+  # The nginx reverse proxy: many services depend on it, so check the proxied
+  # sites too, not only nginx itself.
+  - name: proxy01
+    address: 192.0.2.11
     snapshot: {provider: proxmox, vmid: 102, type: lxc}
-    policy: {modes: [report, patch], rollback: manual, window: ["Sun 04:00-05:00"]}
-    healthchecks: [{systemd: postfix@-.service}]
-  - name: aptwarden                # the central host itself: report only
+    policy:
+      modes: [report, dry-run, patch]
+      window: ["Tue,Thu 03:00-04:00"]
+    healthchecks:
+      - systemd: nginx.service
+      - tcp: 192.0.2.11:443
+      - http: https://app.example.org/healthz
+        expect_status: 200
+        contains: "ok"           # optional: text the response must contain
+
+  # Proxmox Mail Gateway (Debian based). A rollback would discard mail received
+  # after the snapshot: start with report and dry-run, later patch with a
+  # manual rollback.
+  - name: pmg01
+    address: 192.0.2.12
+    snapshot: {provider: proxmox, vmid: 103, type: qemu}
+    policy:
+      modes: [report, dry-run]   # add patch once the dry-run plans look right
+      rollback: manual
+      window: ["Sun 04:00-05:00"]
+    healthchecks:
+      - systemd: postfix.service
+      - systemd: pmg-smtp-filter.service
+      - systemd: pmgproxy.service
+      - tcp: 192.0.2.12:25
+
+  # mailcow on Docker: aptwarden reports the host's Debian packages, not the
+  # container images (update those with mailcow's update.sh). An upgrade of
+  # docker-ce or containerd restarts every container, so keep this host on report.
+  - name: mailcow01
+    address: 192.0.2.13
+    ssh: {port: 2222}            # per-host SSH overrides
+    policy:
+      modes: [report]
+
+  # The Proxmox VE node itself: report only. Proxmox needs `apt full-upgrade`
+  # and the node cannot snapshot itself, so never patch it with aptwarden.
+  - name: pve01
+    address: 192.0.2.2
+    policy:
+      modes: [report]
+
+  # The central aptwarden host itself (no SSH needed): report only.
+  - name: aptwarden
     transport: local
