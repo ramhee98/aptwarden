@@ -129,6 +129,37 @@ journalctl -u aptwarden-report.service      # report plus JSON log lines
 - **Sandboxing:** the unit's hardening options were tested in an unprivileged Proxmox LXC
   without nesting.
 
+### Updating
+
+```sh
+/opt/aptwarden/bin/pip install --no-deps --no-build-isolation --force-reinstall \
+    git+https://github.com/ramhee98/aptwarden
+aptwarden version && aptwarden config check
+runuser -u aptwarden -- aptwarden hosts check
+```
+
+Notes on updating:
+
+- **`--force-reinstall` is required** while the version number does not change between
+  commits; without it pip keeps the installed copy.
+- **State and cache upgrade themselves:** `state.db` and `cache.db` migrate on first
+  use. The cache may be rebuilt, which costs one feed download.
+- **The systemd units are not part of the package.** If `contrib/systemd/` changed,
+  copy the units again and run `systemctl daemon-reload`:
+
+  ```sh
+  base=https://raw.githubusercontent.com/ramhee98/aptwarden/main/contrib/systemd
+  for u in aptwarden-report.service aptwarden-report.timer aptwarden-patch.service \
+           aptwarden-patch.timer aptwarden-status-publish.path aptwarden-status-publish.service; do
+      [ -e /etc/systemd/system/$u ] && curl -fsSo /etc/systemd/system/$u $base/$u
+  done
+  systemctl daemon-reload
+  ```
+
+- **The helper on patch targets is not updated automatically.** `hosts check` reports
+  `helper/sudo NOT ready` when it is outdated; reinstall it as described under
+  [Target hosts: helper and sudo](#target-hosts-helper-and-sudo).
+
 ## Configuration
 
 [contrib/config.example.yaml](contrib/config.example.yaml) lists every option with its
