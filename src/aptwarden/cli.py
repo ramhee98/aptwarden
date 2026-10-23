@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from aptwarden import __version__, config, report
@@ -535,6 +536,34 @@ def cmd_config_check(args, cfg: config.Config) -> int:
     return EXIT_OK
 
 
+# Commands that never write to the state or cache directories.
+_READ_ONLY = {"config", "version", "helper"}
+
+
+def ownership_problem(dirs, euid: int, owner_of=lambda p: p.stat().st_uid) -> str | None:
+    """Running as root on directories that belong to the service user would
+    create root-owned files the service can no longer read (e.g. the status
+    page). Returns an error message, or None if all is well."""
+    if euid != 0:
+        return None
+    for d in dirs:
+        try:
+            uid = owner_of(d)
+        except OSError:
+            continue  # not created yet
+        if uid != 0:
+            try:
+                import pwd
+
+                user = pwd.getpwuid(uid).pw_name
+            except (KeyError, ImportError):
+                user = str(uid)
+            return (f"{d} belongs to {user!r}, not root: running as root would create files "
+                    f"{user!r} cannot read. Run as that user instead: "
+                    f"runuser -u {user} -- aptwarden ...")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -553,6 +582,12 @@ def main(argv: list[str] | None = None) -> int:
     except config.ConfigError as e:
         print(f"aptwarden: {e}", file=sys.stderr)
         return EXIT_USAGE
+
+    if args.command not in _READ_ONLY:
+        problem = ownership_problem([cfg.state_dir, cfg.cache_dir], os.geteuid())
+        if problem:
+            print(f"aptwarden: {problem}", file=sys.stderr)
+            return EXIT_USAGE
 
     level = "debug" if args.verbose else "warning" if args.quiet else cfg.log["level"]
     aplog.setup(level, cfg.log["format"])

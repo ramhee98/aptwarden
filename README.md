@@ -129,6 +129,14 @@ journalctl -u aptwarden-report.service      # report plus JSON log lines
 - **Sandboxing:** the unit's hardening options were tested in an unprivileged Proxmox LXC
   without nesting.
 
+### Running commands
+
+Run aptwarden as the service user: `runuser -u aptwarden -- aptwarden report`. As
+root, aptwarden refuses commands that write to state or cache directories owned by
+another user. Otherwise it would create root-owned files (e.g. the status page) that
+the service and the publish unit can no longer read. Read-only commands such as
+`config check` and `helper show` also work as root.
+
 ### Updating
 
 ```sh

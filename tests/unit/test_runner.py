@@ -230,3 +230,26 @@ def test_hosts_check_accept_new_only_for_unknown_hosts(setup, tmp_path, monkeypa
     assert seen == {"web01": "accept-new", "db01": "yes"}  # known host stays strict
     assert "web01: new host key recorded: SHA256:new (ED25519)" in out
     assert "db01" not in out.split("new host key")[0].splitlines()[-1]
+
+
+def test_ownership_guard(tmp_path, monkeypatch, capsys):
+    from aptwarden.cli import ownership_problem
+
+    owners = {tmp_path / "state": 999, tmp_path / "cache": 0}
+    owner_of = owners.__getitem__
+    msg = ownership_problem([tmp_path / "state", tmp_path / "cache"], 0, owner_of)
+    assert "not root" in msg and "runuser -u" in msg
+    # as the service user, or with root-owned directories: fine
+    assert ownership_problem([tmp_path / "state"], 999, owner_of) is None
+    assert ownership_problem([tmp_path / "cache"], 0, owner_of) is None
+    # directories that do not exist yet are fine too
+    assert ownership_problem([tmp_path / "missing"], 0) is None
+
+    # wired into the CLI for commands that write state, not for read-only ones
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"state_dir: {tmp_path}/s\ncache_dir: {tmp_path}/c\n"
+                           "hosts: [{name: web01}]\n")
+    monkeypatch.setattr("aptwarden.cli.ownership_problem", lambda dirs, euid: "owned by aptwarden")
+    assert cli.main(["-c", str(config_file), "status"]) == 2
+    assert "owned by aptwarden" in capsys.readouterr().err
+    assert cli.main(["-c", str(config_file), "config", "check"]) == 0
