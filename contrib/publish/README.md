@@ -49,6 +49,7 @@ Add `nginx-aptwarden.conf` to the server block of an HTTPS vhost and adjust the
 ```sh
 # record the web server's host key after checking its fingerprint
 ssh-keyscan -t ed25519 proxy.example.org >> /var/lib/aptwarden/known_hosts
+runuser -u aptwarden -- aptwarden report             # writes the page the first time
 systemctl start aptwarden-status-publish.service     # first copy, check for errors
 systemctl enable --now aptwarden-status-publish.path
 ```

@@ -3,6 +3,8 @@ Description=Copy the aptwarden status page to the web server
 Documentation=https://github.com/ramhee98/aptwarden
 Wants=network-online.target
 After=network-online.target
+# Nothing to publish before the first report run wrote the page.
+ConditionPathExists=/var/lib/aptwarden/www/index.html
 
 [Service]
 Type=oneshot
