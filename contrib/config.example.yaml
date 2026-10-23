@@ -125,6 +125,29 @@ hosts:
         expect_status: [200, 301, 302]
         verify_tls: true
 
+  # WordPress with Apache, PHP-FPM and MariaDB in one LXC. aptwarden covers the
+  # Debian packages (PHP, Apache, MariaDB, OpenSSL); WordPress core, plugins and
+  # themes installed through WordPress itself are not covered, keep its own
+  # auto-updates for those. A rollback also resets the database to the snapshot:
+  # fine for a brochure site, use rollback: manual for shops or sites with comments.
+  - name: wordpress01
+    address: 192.0.2.14
+    snapshot: {provider: proxmox, vmid: 104, type: lxc}
+    policy:
+      modes: [report, dry-run, patch]
+      window: ["Mon..Fri 03:00-04:00"]
+      rollback: manual
+    health: {grace: 20s, retries: 6, interval: 5s}   # PHP-FPM needs a moment after restarts
+    healthchecks:
+      - systemd: apache2.service
+      - systemd: php8.4-fpm.service   # php8.2-fpm.service on Debian 12
+      - systemd: mariadb.service
+      - http: https://blog.example.org/
+        expect_status: 200
+        contains: "</html>"           # a PHP or database error page fails this
+      - http: https://blog.example.org/wp-login.php
+        expect_status: 200
+
   # The nginx reverse proxy: many services depend on it, so check the proxied
   # sites too, not only nginx itself.
   - name: proxy01
