@@ -89,3 +89,30 @@ def test_known_host_keys(tmp_path):
     assert known_host_keys("192.0.2.11", 2222, str(kh)) == [f"{fp} (ED25519)"]
     assert known_host_keys("192.0.2.11", 22, str(kh)) == []
     assert known_host_keys("192.0.2.99", 22, str(kh)) == []
+
+
+def test_helper_install_script(tmp_path, capsys):
+    import os
+    import subprocess
+    from importlib import resources
+
+    from aptwarden import cli
+
+    assert cli.main(["helper", "show", "--install"]) == 0
+    script = capsys.readouterr().out
+    path = tmp_path / "install.sh"
+    path.write_text(script)
+    assert subprocess.run(["sh", "-n", str(path)]).returncode == 0
+    helper = resources.files("aptwarden").joinpath("helper/aptwarden-helper").read_text()
+    sudoers = resources.files("aptwarden").joinpath("helper/sudoers").read_text()
+    assert helper in script and sudoers in script
+
+    # "root", but without the aptwarden user: must stop before installing anything
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "id").write_text('#!/bin/sh\n[ "$1" = "-u" ] && { echo 0; exit 0; }\nexit 1\n')
+    (shim / "id").chmod(0o755)
+    env = {**os.environ, "PATH": f"{shim}:{os.environ['PATH']}"}
+    r = subprocess.run(["sh", str(path)], capture_output=True, text=True, env=env)
+    assert r.returncode == 1
+    assert "user 'aptwarden' missing" in r.stderr

@@ -165,7 +165,8 @@ Notes on updating:
   ```
 
 - **The helper on patch targets is not updated automatically.** `hosts check` reports
-  `helper/sudo NOT ready` when it is outdated; reinstall it as described under
+  `helper NOT ready: outdated helper` when it is outdated; refresh it with
+  `aptwarden helper show --install`, see
   [Target hosts: helper and sudo](#target-hosts-helper-and-sudo).
 
 ## Configuration
@@ -317,15 +318,28 @@ hosts therefore get a small root-owned helper. It has fixed subcommands, validat
 `package=version` and only upgrades installed packages. sudo allows this one script and
 nothing else:
 
+`aptwarden helper show --install` prints a self-contained script that installs everything
+in one step. Run it as root on the target. The script:
+
+- installs sudo if it is missing,
+- writes helper and sudoers rule with the right owner and mode, and removes misnamed
+  rule files (sudo silently ignores files with a dot in their name),
+- validates the rule with `visudo` and checks the helper as user `aptwarden`.
+
+It is idempotent, so you can run it again after an update to refresh the helper.
+
 ```sh
-# from a machine with aptwarden installed and root SSH access to the target
-ssh root@TARGET 'apt-get install -y sudo && install -d -m 755 /usr/local/lib/aptwarden'
-aptwarden helper show | ssh root@TARGET \
-    'install -m 755 -o root -g root /dev/stdin /usr/local/lib/aptwarden/aptwarden-helper'
-aptwarden helper show --sudoers | ssh root@TARGET \
-    'install -m 440 -o root -g root /dev/stdin /etc/sudoers.d/aptwarden && visudo -cf /etc/sudoers.d/aptwarden'
-# check as the aptwarden user: the helper works, anything else is refused
-ssh aptwarden@TARGET 'sudo -n /usr/local/lib/aptwarden/aptwarden-helper version; sudo -n id'
+# via SSH as root
+aptwarden helper show --install | ssh root@TARGET sh
+# or for a Proxmox container without root SSH, through the node
+aptwarden helper show --install | ssh root@PVE-NODE pct exec VMID -- sh
+```
+
+The user `aptwarden` with the central host's key must exist first (see
+[Target hosts](#target-hosts)). Check from the central host afterwards:
+
+```sh
+runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helper ok"
 ```
 
 Install `needrestart` on the target if services should be restarted after library
@@ -482,7 +496,7 @@ aptwarden patch [--dry-run]            patch (see Patching)
 aptwarden rollback --host H            roll back to aptwarden's snapshot
 aptwarden snapshots list | cleanup     aptwarden's snapshots
 aptwarden patches                      patch history
-aptwarden helper show [--sudoers]      the root helper for target hosts
+aptwarden helper show [--install]      the root helper (or its installer) for targets
 ```
 
 Example (shortened):
