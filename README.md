@@ -65,12 +65,14 @@ PyPI is not needed.
 ### Central host
 
 ```sh
-apt install python3 python3-venv python3-yaml python3-jsonschema openssh-client git
+apt install python3 python3-venv python3-yaml python3-jsonschema python3-setuptools \
+    python3-wheel openssh-client git
 
 useradd --system --home-dir /var/lib/aptwarden --shell /usr/sbin/nologin aptwarden
 
 python3 -m venv --system-site-packages /opt/aptwarden
-/opt/aptwarden/bin/pip install --no-deps git+https://github.com/ramhee98/aptwarden
+# --no-build-isolation: build with Debian's setuptools, so PyPI is never contacted
+/opt/aptwarden/bin/pip install --no-deps --no-build-isolation git+https://github.com/ramhee98/aptwarden
 # or from a wheel built with `pip wheel --no-deps -w dist .`
 ln -s /opt/aptwarden/bin/aptwarden /usr/local/bin/aptwarden
 
