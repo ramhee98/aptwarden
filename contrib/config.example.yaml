@@ -148,6 +148,25 @@ hosts:
       - http: https://blog.example.org/wp-login.php
         expect_status: 200
 
+  # Pi-hole in an LXC. Pi-hole itself (pihole-FTL, which includes the DNS server)
+  # comes from its own installer, not from Debian: update it with `pihole -up`;
+  # aptwarden covers the Debian packages underneath. Patching interrupts DNS for
+  # every client briefly, so use a night window, and give a second Pi-hole a
+  # different one. Use IP addresses here: the patch run must not depend on the
+  # DNS server it is patching.
+  - name: pihole01
+    address: 192.0.2.15
+    snapshot: {provider: proxmox, vmid: 105, type: lxc}
+    policy:
+      modes: [report, dry-run, patch]
+      window: ["Mon..Fri 04:00-04:30"]
+    healthchecks:
+      - systemd: pihole-FTL.service
+      - tcp: 192.0.2.15:53            # DNS (pihole-FTL also listens on TCP)
+      - http: https://192.0.2.15/admin/
+        expect_status: [200, 302]     # 302: redirect to the login page
+        verify_tls: false             # Pi-hole's default certificate is self-signed
+
   # The nginx reverse proxy: many services depend on it, so check the proxied
   # sites too, not only nginx itself.
   - name: proxy01
