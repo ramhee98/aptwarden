@@ -203,7 +203,7 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
             r = t.run(["sudo", "-n", h.ssh.helper, "version"], timeout=30)
             problem = explain_helper_failure(r, h.ssh.helper)
             if problem:
-                notes.append("helper NOT ready: " + problem.split("; see README")[0])
+                notes.append("helper NOT ready: " + problem.rsplit("; see README", 1)[0])
             else:
                 notes.append("helper ok")
         except TransportError as e:

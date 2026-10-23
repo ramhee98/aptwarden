@@ -417,3 +417,11 @@ def test_no_newer_candidate_explains_versions(state):
     reason = result.skipped_items[0]["skipped"]
     assert "installed 3.5.1-1, fix needs 3.5.4-1" in reason
     assert "candidate 3.5.1-1" in reason and "security missing" in reason
+
+
+def test_explain_helper_failure_keeps_original_message():
+    from aptwarden.patch.runner import explain_helper_failure
+
+    r = CommandResult(["sudo"], 1, "", "env: ‘sudo’: No such file or directory")
+    msg = explain_helper_failure(r, HELPER)
+    assert msg.startswith("sudo is not installed on the host (host said: env: ‘sudo’: No such")

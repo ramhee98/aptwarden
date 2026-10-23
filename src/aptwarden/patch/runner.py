@@ -67,8 +67,9 @@ def explain_helper_failure(r, helper: str) -> str | None:
                   "wrong mode, or its file name contains a '.' (then sudo ignores it); "
                   f"or the helper is not at {helper}")
     else:
-        reason = f"helper not usable via sudo ({raw or 'no output'})"
-    return f"{reason}; {HELPER_HINT}"
+        return f"helper not usable via sudo ({raw or 'no output'}); {HELPER_HINT}"
+    # keep the original message: the classification above is only a heuristic
+    return f"{reason} (host said: {raw or out or 'no output'}); {HELPER_HINT}"
 
 
 class PatchAbort(Exception):
