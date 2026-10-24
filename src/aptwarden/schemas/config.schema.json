@@ -721,6 +721,10 @@
             "timeout": {
               "type": "integer",
               "minimum": 1
+            },
+            "on_host": {
+              "description": "Run the check on the target via SSH (as the unprivileged user) instead of from the central host",
+              "type": "boolean"
             }
           }
         },
@@ -738,6 +742,10 @@
             "timeout": {
               "type": "integer",
               "minimum": 1
+            },
+            "on_host": {
+              "description": "Run the check on the target via SSH (as the unprivileged user) instead of from the central host",
+              "type": "boolean"
             }
           }
         }

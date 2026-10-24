@@ -441,6 +441,35 @@ aptwarden snapshots cleanup [--dry-run]
 aptwarden hosts check                  # also checks helper/sudo, snapshots, healthchecks
 ```
 
+### Healthchecks from the central host or on the host
+
+`http` and `tcp` checks run from the central host by default, so they see the service
+the way clients do. With `on_host: true` they run on the target itself, over the
+existing SSH connection, as the unprivileged `aptwarden` user and not through the root
+helper. Then the central host needs nothing but SSH to the target, and no firewall
+openings for the checked ports.
+
+```yaml
+healthchecks:
+  - http: https://blog.example.org/
+    on_host: true          # curl on the host, connected to 127.0.0.1
+    contains: "</html>"
+  - tcp: 127.0.0.1:53
+    on_host: true
+```
+
+- **Host name, virtual host and TLS are kept.** An on-host HTTP check connects to
+  `127.0.0.1` but keeps the URL's host name (`curl --resolve`), so virtual hosts, SNI and
+  certificate checks behave as from outside.
+- **curl is needed on the target** for HTTP checks; `hosts check` reports when it is
+  missing. TCP checks only need bash.
+- **The service sees `127.0.0.1` as the client.** IP allowlists, rate limits or fail2ban
+  may answer differently than for real clients (e.g. 403 instead of 401). Adjust
+  `expect_status` accordingly.
+- **Weaker for network problems:** an on-host check does not notice a firewall or routing
+  problem between clients and the host. For the question "did the update break the
+  service?" it covers the same ground.
+
 The patch timer runs hourly. Each host is only patched inside its window:
 
 ```sh

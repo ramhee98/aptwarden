@@ -160,10 +160,14 @@ hosts:
     policy:
       modes: [report, dry-run, patch]
       window: ["Mon..Fri 04:00-04:30"]
+    # on_host: checked on the Pi-hole itself over SSH, so the central host needs no
+    # firewall opening for DNS and HTTPS into this network, only SSH
     healthchecks:
       - systemd: pihole-FTL.service
-      - tcp: 192.0.2.15:53            # DNS (pihole-FTL also listens on TCP)
-      - http: https://192.0.2.15/admin/
+      - tcp: 127.0.0.1:53             # DNS (pihole-FTL also listens on TCP)
+        on_host: true
+      - http: https://127.0.0.1/admin/
+        on_host: true                 # needs curl on the Pi-hole
         expect_status: [200, 302]     # 302: redirect to the login page
         verify_tls: false             # Pi-hole's default certificate is self-signed
 

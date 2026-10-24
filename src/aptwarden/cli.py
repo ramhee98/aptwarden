@@ -210,6 +210,9 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
                 notes.append("helper NOT ready: " + problem.rsplit("; see README", 1)[0])
             else:
                 notes.append("helper ok")
+            if any("http" in c and c.get("on_host") for c in h.healthchecks) and \
+                    t.run(["sh", "-c", "command -v curl"], timeout=15).returncode != 0:
+                notes.append("curl NOT installed (needed by on_host http checks)")
         except TransportError as e:
             notes.append(f"helper check failed: {e}")
         finally:
