@@ -470,6 +470,28 @@ healthchecks:
   problem between clients and the host. For the question "did the update break the
   service?" it covers the same ground.
 
+### Checking a site through an internal address (`connect_to`)
+
+When a site's name resolves to a public IP the central host cannot reach (NAT, split
+DNS), point the check at the internal address, typically the reverse proxy:
+
+```yaml
+healthchecks:
+  - http: https://blog.example.org/healthz
+    connect_to: 192.0.2.11          # also ip:port or [ipv6]:port
+```
+
+- **What changes:** only where the TCP connection goes. SNI, the `Host` header and the
+  certificate check still use the name from the URL.
+- **Only the original host is redirected.** A redirect to another host is resolved
+  normally.
+- **Default for several checks:** set `health.connect_to` globally or per host. A
+  `connect_to` on the check wins.
+- **With `on_host: true`:** `connect_to` replaces `127.0.0.1` (via
+  `curl --connect-to`), but only when it is set on the check itself. The default from
+  `health` never applies to on-host checks.
+- **Shown in check names**, e.g. `http https://blog.example.org/healthz (via 192.0.2.11)`.
+
 The patch timer runs hourly. Each host is only patched inside its window:
 
 ```sh

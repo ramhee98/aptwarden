@@ -46,7 +46,7 @@ DEFAULTS: dict = {
         "allow_extra_upgrades": False,
         "allow_new_packages": [],
     },
-    "health": {"grace": "10s", "retries": 6, "interval": "5s"},
+    "health": {"grace": "10s", "retries": 6, "interval": "5s", "connect_to": None},
     "snapshots": {"keep": "7d", "vmstate": False},
     "status_page": {"enabled": True, "path": None, "mode": "0640"},
     "sources": {
@@ -297,6 +297,7 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
         if snapshot["provider"] == "proxmox" and "proxmox" not in merged:
             raise ConfigError(f"host {h['name']}: snapshot provider proxmox needs a proxmox "
                               f"section")
+        health = deep_merge(merged["health"], h.get("health", {}))
         hosts.append(
             HostConfig(
                 name=h["name"],
@@ -305,12 +306,34 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
                 ssh=SshSettings(**ssh),
                 tags=h.get("tags", []),
                 policy=policy,
-                health=deep_merge(merged["health"], h.get("health", {})),
-                healthchecks=h.get("healthchecks", []),
+                health=health,
+                healthchecks=_healthchecks(h, health),
                 snapshot=snapshot,
             )
         )
     return Config(path=path, raw=merged, hosts=hosts)
+
+
+def _healthchecks(host: dict, health: dict) -> list[dict]:
+    """Validate connect_to and apply the health default to HTTP checks that run
+    from the central host. A check's own connect_to wins; on-host checks only
+    use one set directly on the check."""
+    from aptwarden.health import parse_connect_to  # avoid an import cycle at load time
+
+    checks = []
+    for raw in host.get("healthchecks", []):
+        check = dict(raw)
+        if "http" in check:
+            if (health.get("connect_to") and "connect_to" not in check
+                    and not check.get("on_host")):
+                check["connect_to"] = health["connect_to"]
+            if check.get("connect_to"):
+                try:
+                    parse_connect_to(check["connect_to"], 443)
+                except ValueError as e:
+                    raise ConfigError(f"host {host['name']}: {e}") from None
+        checks.append(check)
+    return checks
 
 
 def _check_durations(section: dict) -> None:

@@ -110,6 +110,8 @@ health:                            # timing of the post-patch healthchecks
   grace: 10s
   retries: 6
   interval: 5s
+  connect_to: null                 # default for http checks from the central host, e.g. the
+                                   # reverse proxy's internal IP (a check's own value wins)
 
 hosts:
   # A simple web service in an LXC container: the typical auto-patch candidate.
@@ -143,6 +145,7 @@ hosts:
       - systemd: php8.4-fpm.service   # php8.2-fpm.service on Debian 12
       - systemd: mariadb.service
       - http: https://blog.example.org/
+        connect_to: 192.0.2.11        # the reverse proxy: the name resolves to a public IP
         expect_status: 200
         contains: "</html>"           # a PHP or database error page fails this
       - http: https://blog.example.org/wp-login.php

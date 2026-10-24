@@ -666,6 +666,13 @@
         },
         "interval": {
           "$ref": "#/$defs/duration"
+        },
+        "connect_to": {
+          "description": "Default connect_to for this scope's HTTP checks run from the central host",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -725,6 +732,11 @@
             "on_host": {
               "description": "Run the check on the target via SSH (as the unprivileged user) instead of from the central host",
               "type": "boolean"
+            },
+            "connect_to": {
+              "description": "Connect to this address (ip, ip:port or [ipv6]:port) instead of resolving the URL's host; SNI, Host header and certificate check keep the URL's host name",
+              "type": "string",
+              "minLength": 1
             }
           }
         },
