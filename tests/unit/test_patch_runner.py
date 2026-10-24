@@ -437,3 +437,16 @@ def test_nothing_to_do_explains_policy(state):
                              " 1 low, 1 medium, 1 restricted to report by a definition")
     result, _ = run(state, h, findings=[])
     assert result.reason == "no fixable vulnerabilities"
+
+
+def test_severity_override_patches_medium_and_notes_it(state):
+    h = openssl_host()
+    from dataclasses import replace
+    base = host_config()
+    # set by `aptwarden patch --min-severity`, never accepted in the config file
+    cfg = replace(base, policy={**base.policy, "severity_override": True,
+                                "auto_patch_severities": ["critical", "high", "medium"]})
+    result, _ = run(state, h, cfg=cfg, findings=[finding(severity=Severity.MEDIUM)])
+    assert result.status == "patched", result.reason
+    assert "manual severity override: auto-patch critical, high, medium" in result.notes
+    assert state.patches("web01")[0]["notes"][0].startswith("manual severity override")

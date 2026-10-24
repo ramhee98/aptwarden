@@ -434,6 +434,8 @@ hosts:
 aptwarden patch --dry-run [--host H]   # plan + simulation, changes nothing (ignores windows)
 aptwarden patch [--host H]             # the real thing, inside the maintenance windows
 aptwarden patch --ignore-window        # ... outside them, deliberately
+aptwarden patch --host H --min-severity medium   # this run only: also patch medium (or low)
+aptwarden patch --host H --all-severities        # this run only: every fixable finding
 aptwarden patches [--host H]           # patch history
 aptwarden rollback --host H            # roll back to the newest aptwarden snapshot (asks first)
 aptwarden snapshots list               # snapshots aptwarden created
@@ -491,6 +493,12 @@ healthchecks:
   `curl --connect-to`), but only when it is set on the check itself. The default from
   `health` never applies to on-host checks.
 - **Shown in check names**, e.g. `http https://blog.example.org/healthz (via 192.0.2.11)`.
+
+`--min-severity` and `--all-severities` override `policy.auto_patch_severities` for one
+manual run, e.g. to clean up a host completely. Everything else still applies: `modes`
+must contain `patch`, and the window (unless `--ignore-window`), snapshot, simulation,
+healthchecks, rollback policy and restrictions by definitions are unchanged. The run
+and its patch history are marked with the override; the timer never uses these options.
 
 The patch timer runs hourly. Each host is only patched inside its window:
 

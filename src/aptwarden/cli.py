@@ -73,6 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="plan and simulate only, change nothing")
     p.add_argument("--ignore-window", action="store_true",
                    help="patch outside the maintenance window")
+    sev = p.add_mutually_exclusive_group()
+    sev.add_argument("--all-severities", action="store_true",
+                     help="this run only: patch fixable vulnerabilities of every severity, "
+                          "including unscored ones (overrides policy.auto_patch_severities)")
+    sev.add_argument("--min-severity", choices=["low", "medium", "high", "critical"],
+                     help="this run only: patch fixable vulnerabilities at or above this "
+                          "severity (overrides policy.auto_patch_severities)")
     p.add_argument("--no-notify", action="store_true")
     p.add_argument("--format", choices=["text", "json"], default="text")
 
@@ -423,11 +430,18 @@ def _patch_text(run) -> str:
 def cmd_patch(args, cfg: config.Config) -> int:
     from aptwarden.runner import Runner
 
+    order = ["critical", "high", "medium", "low", "unknown"]
+    severities = None
+    if args.all_severities:
+        severities = order
+    elif args.min_severity:
+        severities = order[:order.index(args.min_severity) + 1]
     runner = Runner(cfg)
     try:
         run = runner.patch(cfg.select_hosts(args.host), dry_run=args.dry_run,
                            ignore_window=args.ignore_window,
-                           notify=not args.no_notify and not args.dry_run)
+                           notify=not args.no_notify and not args.dry_run,
+                           severities=severities)
     except RuntimeError as e:
         print(f"aptwarden: {e}", file=sys.stderr)
         return EXIT_PROBLEM

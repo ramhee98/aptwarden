@@ -7,7 +7,7 @@ import logging
 import secrets
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from aptwarden import inventory, statuspage
@@ -130,10 +130,16 @@ class Runner:
 
     def patch(self, hosts: list[HostConfig], *, dry_run: bool = False,
               ignore_window: bool = False, notify: bool = True,
-              now: datetime | None = None) -> RunReport:
+              now: datetime | None = None, severities: list[str] | None = None) -> RunReport:
+        """``severities`` overrides each host's auto_patch_severities for this run
+        only (manual runs); everything else in the policy still applies."""
         command = "patch --dry-run" if dry_run else "patch"
-        return self._lifecycle(RunReport(new_run_id(), command, utcnow()), notify,
-                               lambda run: self._patch(run, hosts, dry_run, ignore_window, now))
+        run = RunReport(new_run_id(), command, utcnow())
+        if severities is not None:
+            run.notes.append("manual severity override for this run: "
+                             + ", ".join(severities))
+        return self._lifecycle(run, notify, lambda run: self._patch(
+            run, hosts, dry_run, ignore_window, now, severities))
 
     def _lifecycle(self, run: RunReport, notify: bool, body) -> RunReport:
         token = aplog.run_id_var.set(run.run_id)
@@ -269,7 +275,8 @@ class Runner:
         return eligible, skipped
 
     def _patch(self, run: RunReport, hosts: list[HostConfig], dry_run: bool,
-               ignore_window: bool, now: datetime | None) -> None:
+               ignore_window: bool, now: datetime | None,
+               severities: list[str] | None = None) -> None:
         eligible, skipped = self._eligible(hosts, dry_run, ignore_window, now)
         for name, reason in skipped:
             run.patches.append(HostPatchResult(name, run.run_id, dry_run, "skipped",
@@ -284,6 +291,9 @@ class Runner:
             factory = self._transports or TransportFactory()
             try:
                 for h in eligible:
+                    if severities is not None:
+                        h = replace(h, policy={**h.policy, "auto_patch_severities": severities,
+                                               "severity_override": True})
                     run.patches.append(self._patch_host(run, h, runner, factory, dry_run))
             finally:
                 if self._transports is None:

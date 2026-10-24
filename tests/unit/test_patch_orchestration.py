@@ -266,3 +266,66 @@ def test_proxmox_client_pins_certificate(tls_server, tmp_path):
     unpinned = ProxmoxClient({**settings, "tls_fingerprint": None}, tmp_path)
     with pytest.raises(SnapshotError, match="CERTIFICATE_VERIFY_FAILED"):
         unpinned.request("GET", "/version")  # self-signed, no CA, no pin: refused
+
+
+def test_cli_severity_override_maps_and_leaves_config_alone(make_config, tmp_path, monkeypatch):
+    import json
+
+    from aptwarden import cli
+
+    cfg = cfg_with(make_config)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(json.dumps(cfg.raw))
+    seen = []
+
+    def fake_patch(self, hosts, **kw):
+        seen.append(kw["severities"])
+        return RunReport("r", "patch", "now", status="ok")
+
+    monkeypatch.setattr(Runner, "patch", fake_patch)
+    base = ["-c", str(config_file), "-q", "patch", "--host", "web01"]
+    assert cli.main(base) == 0
+    assert cli.main(base + ["--min-severity", "medium"]) == 0
+    assert cli.main(base + ["--all-severities"]) == 0
+    assert seen == [None, ["critical", "high", "medium"],
+                    ["critical", "high", "medium", "low", "unknown"]]
+    with pytest.raises(SystemExit):
+        cli.main(base + ["--all-severities", "--min-severity", "low"])
+
+
+def test_runner_override_is_per_run(make_config, monkeypatch):
+    cfg = cfg_with(make_config)
+    h = openssl_host()
+    seen = []
+
+    class Factory:
+        def create(self, host):
+            return ScriptedTransport(h)
+
+        def cleanup(self):
+            pass
+
+    class Capture(PatchRunner):
+        def run(self, host, *a, **kw):
+            seen.append(dict(host.policy))
+            return HostPatchResult(host.name, "r", status="nothing-to-do")
+
+    runner = Runner(cfg, transports=Factory(), providers=lambda host: FakeProvider(h),
+                    patch_runner=Capture(None, []))
+
+    def fake_report(run, hosts, force):
+        run.sources = [SourceStatus("debian_tracker")]
+        for host in hosts:
+            run.hosts.append(HostRecord(run.run_id, host.name, "x", True, None, {}, [], "now", []))
+            run.inventories[host.name] = inventory(h)
+        run.status = "ok"
+
+    monkeypatch.setattr(runner, "_report", fake_report)
+    run = runner.patch(cfg.select_hosts(["web01"]), ignore_window=True, notify=False,
+                       severities=["critical", "high", "medium", "low", "unknown"])
+    assert seen[0]["auto_patch_severities"][-1] == "unknown" and seen[0]["severity_override"]
+    assert "manual severity override for this run" in run.notes[0]
+    # the configuration itself is untouched
+    assert cfg.select_hosts(["web01"])[0].policy["auto_patch_severities"] == ["critical", "high"]
+    assert "severity_override" not in cfg.select_hosts(["web01"])[0].policy
+    runner.close()

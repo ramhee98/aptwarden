@@ -194,6 +194,9 @@ class PatchRunner:
     def _run(self, result: HostPatchResult, host: HostConfig, inv: HostInventory,
              findings: list[Finding], t: Transport, provider: SnapshotProvider) -> None:
         policy = host.policy
+        if policy.get("severity_override"):
+            result.notes.append("manual severity override: auto-patch "
+                                + ", ".join(policy["auto_patch_severities"]))
         items = planner.group(planner.select(findings, policy))
         if not items:
             result.status = "nothing-to-do"
