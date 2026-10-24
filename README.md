@@ -17,15 +17,15 @@ Where you allow it, aptwarden also patches, behind a staged safety net:
 5. healthchecks
 6. automatic rollback on failure
 
-> **Status:** All four phases are done:
+> **Status:** Done:
 >
 > - reporting
 > - e-mail notifications
 > - signed custom definitions
 > - patching with Proxmox snapshots and rollback
+> - a static status page
 >
-> Docker image scanning and a status web page are planned. See
-> [docs/architecture.md](docs/architecture.md).
+> Docker image scanning is planned. See [docs/architecture.md](docs/architecture.md).
 
 ## How it works
 
@@ -52,10 +52,14 @@ aptwarden report
 
 ## Requirements
 
-- Central host: Debian 12 or 13 (a small LXC is enough, 1 GB RAM recommended) with
-  Python 3.11+, OpenSSH client and outbound HTTPS to `security-tracker.debian.org`,
-  `api.osv.dev`, `services.nvd.nist.gov` and `www.cisa.gov`.
-- Target hosts: Debian (or Debian based with `VERSION_CODENAME`) reachable over SSH.
+- **Central host:** Debian 12 or 13 (a small LXC is enough, 1 GB RAM recommended) with
+  Python 3.11+ and the OpenSSH client. It needs outbound HTTPS to
+  `security-tracker.debian.org`, `api.osv.dev`, `services.nvd.nist.gov`, `www.cisa.gov`
+  and `github.com` (custom definitions, installation, updates). It also needs SSH to
+  every target and, for patching, the Proxmox API (port 8006).
+- **Target hosts:** Debian (or Debian based with `VERSION_CODENAME`) reachable over SSH.
+  HTTP and TCP healthchecks run from the central host unless `on_host` is set, see
+  [Healthchecks](#healthchecks-from-the-central-host-or-on-the-host).
 
 The runtime dependencies are PyYAML and jsonschema. Both come from Debian packages,
 PyPI is not needed.
@@ -87,8 +91,10 @@ cp contrib/config.example.yaml /etc/aptwarden/config.yaml   # then edit hosts
 
 ### Target hosts
 
-Reporting only reads the dpkg database, so the SSH user needs no sudo rights. Restrict
-the key to the central host's address:
+Reporting only reads the dpkg database, so the SSH user needs no sudo rights. Hosts
+that should also be patched additionally get a small helper and a sudo rule, see
+[Target hosts: helper and sudo](#target-hosts-helper-and-sudo). Restrict the key to the
+central host's address:
 
 ```sh
 useradd --system --create-home --shell /bin/sh aptwarden
@@ -234,12 +240,22 @@ all, aptwarden falls back to NVD, which allows 5 requests per 30 seconds without
 Lookups that don't fit into the per-run budget continue on the next run. A free API key
 (<https://nvd.nist.gov/developers/request-an-api-key>) raises the rate tenfold:
 
+```sh
+( umask 077; nano /etc/aptwarden/credentials/nvd-api-key )      # paste the key
+chown aptwarden: /etc/aptwarden/credentials/nvd-api-key
+```
+
 ```yaml
 enrich:
   cvss:
     nvd:
-      api_key_file: nvd-api-key   # with LoadCredential=nvd-api-key:/etc/aptwarden/credentials/nvd-api-key
+      api_key_file: credentials/nvd-api-key    # relative to /etc/aptwarden
 ```
+
+This works for timer runs and for manual `runuser` runs alike. With systemd's
+`LoadCredential=` instead, the file may stay root-owned, but then it is only readable
+inside the service, not for manual runs. The log line `cvss lookup` shows progress:
+`nvd_waiting` drops by about 80 per run with a key, about 9 without.
 
 ### Notifications
 
@@ -276,7 +292,9 @@ host's address. Otherwise every alert is delayed and the first attempt fails.
 
 ## Patching
 
-Patching is opt-in per host. aptwarden only patches a host when all of these hold:
+Patching is opt-in per host. Every configured host is always included in reports;
+`policy.modes` only decides whether `dry-run` and `patch` are allowed (`patch` implies
+`dry-run`). aptwarden only patches a host when all of these hold:
 
 - its `policy.modes` contains `patch`,
 - the run is inside one of its maintenance windows,
@@ -293,7 +311,7 @@ Patching is opt-in per host. aptwarden only patches a host when all of these hol
 | snapshot | Proxmox snapshot `aptw_<run-id>`, without RAM state by default | `aborted` |
 | apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg | rollback |
 | restart | needrestart `auto` / `list` / `off`; reboot `never` / `if-required` | rollback |
-| healthcheck | systemd units on the host; HTTP and TCP from the central host, with grace period and retries | rollback, or alert only with `rollback: manual` |
+| healthcheck | systemd units on the host; HTTP and TCP from the central host or, with `on_host`, on the host itself; with grace period and retries | rollback, or alert only with `rollback: manual` |
 
 The result is one of these statuses:
 
@@ -376,7 +394,10 @@ pveum acl modify /pool/aptwarden-prod --users aptwarden@pve --roles AptwardenPat
 pveum acl modify /pool/aptwarden-prod --tokens 'aptwarden@pve!central' --roles AptwardenPatch
 ```
 
-Store the secret (the `value` printed once) on the central host only:
+`token_id` in the configuration must match exactly, including the realm:
+`aptwarden@pve!central` and `aptwarden@pam!central` are different tokens, and a
+mismatch shows up as HTTP 401. Store the secret (the `value` printed once) on the
+central host only:
 
 ```sh
 install -d -m 750 -o root -g aptwarden /etc/aptwarden/credentials
@@ -443,6 +464,16 @@ aptwarden snapshots cleanup [--dry-run]
 aptwarden hosts check                  # also checks helper/sudo, snapshots, healthchecks
 ```
 
+`--min-severity` and `--all-severities` override `policy.auto_patch_severities` for one
+manual run, e.g. to clean up a host completely. Everything else still applies: `modes`
+must contain `patch`, and the window (unless `--ignore-window`), snapshot, simulation,
+healthchecks, rollback policy and restrictions by definitions are unchanged. The run
+and its patch history are marked with the override; the timer never uses these options.
+
+`nothing-to-do` names the reason. For example, `25 fixable, none allowed by policy
+(auto-patch: critical, high + KEV): 19 medium, 5 low, 1 unknown` means the fixable
+findings are below the policy's threshold.
+
 ### Healthchecks from the central host or on the host
 
 `http` and `tcp` checks run from the central host by default, so they see the service
@@ -494,11 +525,7 @@ healthchecks:
   `health` never applies to on-host checks.
 - **Shown in check names**, e.g. `http https://blog.example.org/healthz (via 192.0.2.11)`.
 
-`--min-severity` and `--all-severities` override `policy.auto_patch_severities` for one
-manual run, e.g. to clean up a host completely. Everything else still applies: `modes`
-must contain `patch`, and the window (unless `--ignore-window`), snapshot, simulation,
-healthchecks, rollback policy and restrictions by definitions are unchanged. The run
-and its patch history are marked with the override; the timer never uses these options.
+### Timer and maintenance windows
 
 The patch timer runs hourly. Each host is only patched inside its window:
 
@@ -515,13 +542,19 @@ Mails from patch runs:
 
 Quiet hours cause no mail.
 
+A patch run processes its hosts one after another, without ordering between them. Give
+hosts that others depend on (DNS such as Pi-hole, the reverse proxy) their own window,
+apart from the hosts behind them. Otherwise a restart of the proxy can fail the
+healthchecks of a host behind it. An unimportant host patched a day earlier works as a
+canary for bad package updates.
+
 ## Status page
 
 After every `report` and `patch` run, aptwarden writes a static, read-only HTML page:
 `/var/lib/aptwarden/www/index.html` by default. It contains:
 
-- totals and a table of all hosts (fixable, critical, high, KEV, last scan, last
-  patch)
+- totals and a table of all hosts (modes, fixable, critical, high, KEV, last scan, last
+  patch), and per host its policy, as configured when the page was generated
 - per host: the fixable packages, every vulnerability (collapsible), the patch history
   and aptwarden's snapshots
 - the state of the data sources and definitions, including rejected releases
@@ -598,7 +631,7 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 |---|---|
 | 0 | success |
 | 1 | a host or a data source failed |
-| 2 | configuration or usage error |
+| 2 | configuration or usage error, or run as root on directories owned by the service user |
 
 ## Files
 
@@ -610,6 +643,10 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 | `/var/cache/aptwarden/cache.db` | feed cache, about 100 MB, safe to delete |
 | `/var/cache/aptwarden/definitions.git` | mirror of the definitions repository |
 | `/etc/aptwarden/credentials/` | secrets (Proxmox token, NVD key, SMTP password) |
+| `/etc/aptwarden/ssh/` | SSH keys: `id_ed25519` (targets), `publish_ed25519` (status page) |
+| `/etc/aptwarden/allowed_signers` | keys trusted for signed definition releases |
+| `/etc/aptwarden/publish.env` | `PUBLISH_TARGET` for the status page push |
+| `/var/lib/aptwarden/known_hosts` | SSH host keys of the targets |
 
 ## Known limitations
 
@@ -625,6 +662,8 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
   a node cannot snapshot itself.
 - **`enforce_block: pin` is not implemented yet:** blocked versions are never installed
   by aptwarden, but manual `apt` runs are not prevented.
+- **No ordering or dependencies between hosts** in a patch run, see
+  [Timer and maintenance windows](#timer-and-maintenance-windows).
 
 ## Development
 
@@ -656,7 +695,7 @@ python3 -m venv --system-site-packages .venv
     its hostname as the configured host name:
 
     ```sh
-    APTWARDEN_IT_CONFIG=/etc/aptwarden/config.yaml APTWARDEN_IT_VMIDS=139,140 \
+    APTWARDEN_IT_CONFIG=/etc/aptwarden/config.yaml APTWARDEN_IT_VMIDS=9001,9002 \
         python3 -m pytest -m integration -o addopts= tests/integration/test_patch_live.py
     ```
 
