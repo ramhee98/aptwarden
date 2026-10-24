@@ -72,6 +72,26 @@ def explain_helper_failure(r, helper: str) -> str | None:
     return f"{reason} (host said: {raw or out or 'no output'}); {HELPER_HINT}"
 
 
+def policy_skip_reason(findings: list[Finding], policy: dict) -> str:
+    """Why nothing was selected although the host may have fixable findings."""
+    from collections import Counter
+
+    from aptwarden.models import FindingStatus
+
+    fixable = [f for f in findings if f.status == FindingStatus.FIXABLE and f.fixed_version]
+    if not fixable:
+        return "no fixable vulnerabilities"
+    restricted = sum(1 for f in fixable if f.action == "report")
+    counts = Counter(str(f.severity) for f in fixable if f.action != "report")
+    allowed = ", ".join(policy["auto_patch_severities"]) + (
+        " + KEV" if policy["auto_patch_kev"] else "")
+    parts = [f"{n} {sev}" for sev, n in sorted(counts.items())]
+    if restricted:
+        parts.append(f"{restricted} restricted to report by a definition")
+    return (f"{len(fixable)} fixable, none allowed by policy (auto-patch: {allowed}): "
+            + ", ".join(parts))
+
+
 class PatchAbort(Exception):
     """Stop before anything was changed."""
 
@@ -177,7 +197,7 @@ class PatchRunner:
         items = planner.group(planner.select(findings, policy))
         if not items:
             result.status = "nothing-to-do"
-            result.reason = "no fixable vulnerability allowed by policy"
+            result.reason = policy_skip_reason(findings, policy)
             return
 
         result.stage = "preflight"

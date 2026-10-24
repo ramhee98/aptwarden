@@ -425,3 +425,15 @@ def test_explain_helper_failure_keeps_original_message():
     r = CommandResult(["sudo"], 1, "", "env: ‘sudo’: No such file or directory")
     msg = explain_helper_failure(r, HELPER)
     assert msg.startswith("sudo is not installed on the host (host said: env: ‘sudo’: No such")
+
+
+def test_nothing_to_do_explains_policy(state):
+    h = openssl_host()
+    findings = [finding("CVE-1", severity=Severity.MEDIUM), finding("CVE-2", severity=Severity.LOW),
+                finding("CVE-3", severity=Severity.CRITICAL, definition="AW-1", action="report")]
+    result, _ = run(state, h, findings=findings)
+    assert result.status == "nothing-to-do"
+    assert result.reason == ("3 fixable, none allowed by policy (auto-patch: critical, high + KEV):"
+                             " 1 low, 1 medium, 1 restricted to report by a definition")
+    result, _ = run(state, h, findings=[])
+    assert result.reason == "no fixable vulnerabilities"
