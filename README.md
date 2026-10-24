@@ -342,8 +342,23 @@ The user `aptwarden` with the central host's key must exist first (see
 runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helper ok"
 ```
 
-Install `needrestart` on the target if services should be restarted after library
-updates.
+With `policy.restart: auto` (the default), install `needrestart` too, so that services
+using an updated library are restarted. Without it, a patched host keeps running the
+old code until the next restart. Combined with the installer:
+
+```sh
+# via SSH as root
+aptwarden helper show --install | ssh root@TARGET sh && \
+    ssh root@TARGET 'DEBIAN_FRONTEND=noninteractive apt-get install -y needrestart'
+# or through the Proxmox node
+aptwarden helper show --install | ssh root@PVE-NODE pct exec VMID -- sh && \
+    ssh root@PVE-NODE pct exec VMID -- sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y needrestart'
+```
+
+needrestart needs no configuration. During a patch, aptwarden suppresses its apt hook
+and runs it explicitly according to `policy.restart`. For your own `apt` runs it keeps
+asking interactively as usual. `hosts check` shows `needrestart installed` once it is
+there.
 
 ### Proxmox API token
 
