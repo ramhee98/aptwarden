@@ -102,15 +102,13 @@ def in_any(windows: list[str] | None, now: datetime | None = None,
     return any(parse(w).contains(local) for w in windows)
 
 
-def next_open(windows: list[str] | None, now: datetime | None = None,
-              tz: str | None = None) -> tuple[datetime, bool] | None:
-    """(start, already_open) of the current or next window, in ``tz``.
+def next_start(windows: list[str] | None, now: datetime | None = None,
+               tz: str | None = None) -> datetime | None:
+    """The next time one of the windows begins after ``now``, in ``tz``.
     None without windows (always open)."""
     if not windows:
         return None
     local = local_now(tz, now)
-    if in_any(windows, local):
-        return local, True
     z = local.tzinfo
     best = None
     for w in map(parse, windows):
@@ -125,7 +123,20 @@ def next_open(windows: list[str] | None, now: datetime | None = None,
                 if best is None or start < best:
                     best = start
                 break
-    return (best, False) if best else None
+    return best
+
+
+def next_open(windows: list[str] | None, now: datetime | None = None,
+              tz: str | None = None) -> tuple[datetime, bool] | None:
+    """(start, already_open) of the current or next window, in ``tz``.
+    None without windows (always open)."""
+    if not windows:
+        return None
+    local = local_now(tz, now)
+    if in_any(windows, local):
+        return local, True
+    start = next_start(windows, local, tz)
+    return (start, False) if start else None
 
 
 def server_zone() -> str:

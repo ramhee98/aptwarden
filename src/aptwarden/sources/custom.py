@@ -31,6 +31,11 @@ K_ACCEPTED, K_CHECKED, K_REJECTED = ("definitions.accepted_at", "definitions.che
                                      "definitions.rejected")
 
 
+def stored_definitions(state: State) -> list[Definition]:
+    """The accepted definitions, as kept in state.db."""
+    return [Definition.from_dict(d) for d in state.get(K_DEFS, [])]
+
+
 class CustomSource(Source):
     name = "custom"
     priority = 0
@@ -46,7 +51,7 @@ class CustomSource(Source):
                            Path(signers) if signers else None)
 
     def definitions(self) -> list[Definition]:
-        return [Definition.from_dict(d) for d in self.state.get(K_DEFS, [])]
+        return stored_definitions(self.state)
 
     def refresh(self, force: bool = False) -> SourceStatus:
         status = SourceStatus(self.name)

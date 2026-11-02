@@ -65,6 +65,19 @@ def group(findings: list[Finding]) -> list[PlanItem]:
     return sorted(items.values(), key=lambda i: (-i.severity, i.source_package))
 
 
+def preview(findings: list[Finding], policy: dict, definitions: list[Definition],
+            release: str) -> list[PlanItem]:
+    """What a patch run would select from stored findings, without asking the
+    host: no apt candidates, so an item is only marked skipped when its fixed
+    version itself is blocked by a definition (the run checks the candidate)."""
+    items = group(select(findings, policy))
+    for item in items:
+        block = blocked_by(definitions, item.source_package, release, item.fixed_version)
+        if block:
+            item.skipped = f"fixed version {item.fixed_version} is blocked by {block.id}"
+    return items
+
+
 def parse_show(text: str) -> dict[tuple[str, str], tuple[str, str]]:
     """``apt-cache show pkg=ver...`` -> {(package, version): (source, source_version)}."""
     result = {}

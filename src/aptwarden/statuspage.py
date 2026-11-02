@@ -14,14 +14,18 @@ import logging
 import os
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from aptwarden import __version__
 from aptwarden.config import Config, HostConfig
+from aptwarden.definitions import Definition
 from aptwarden.models import Finding, FindingStatus, Severity
-from aptwarden.patch import window
+from aptwarden.patch import planner, window
+from aptwarden.patch.runner import policy_skip_reason
 from aptwarden.report import group_findings, truncate
+from aptwarden.sources.custom import stored_definitions
 from aptwarden.state import HostRecord, State
 
 log = logging.getLogger(__name__)
@@ -179,9 +183,73 @@ def _policy_line(host: HostConfig | None) -> str:
     return f'<p class="muted">policy: {_e(" · ".join(items))}</p>'
 
 
+@dataclass
+class NextPatch:
+    """Preview of a patch host's next run, from the last scan only: no SSH,
+    no apt simulation."""
+    when: str  # start of the next window, in the host's time zone
+    items: list[planner.PlanItem]
+    summary: str  # e.g. "openssl, inetutils (2 critical, 1 high)"
+
+
+def _next_patch(rec: HostRecord, host: HostConfig | None, definitions: list[Definition],
+                now: datetime) -> NextPatch | None:
+    if host is None or "patch" not in host.policy["modes"]:
+        return None
+    p = host.policy
+    tz = p.get("timezone")
+    if not p["window"]:
+        when = "any time"
+    elif window.in_any(p["window"], now, tz):
+        when = "open now"
+    else:
+        when = _local(window.next_start(p["window"], now, tz), tz)
+    items = planner.preview(rec.findings, p, definitions, rec.summary.get("codename", ""))
+    active = {i.source_package for i in items if not i.skipped}
+    if not items:
+        summary = f"nothing ({policy_skip_reason(rec.findings, p)})"
+    elif not active:
+        summary = "nothing, every selected package is held back by a definition"
+    else:
+        counts = Counter(f.severity for f in planner.select(rec.findings, p)
+                         if f.source_package in active)
+        names = [i.source_package for i in items if not i.skipped]
+        summary = (", ".join(names) + " ("
+                   + ", ".join(f"{n} {sev}" for sev, n in sorted(counts.items(), reverse=True))
+                   + ")")
+    return NextPatch(when, items, summary)
+
+
+def _next_patch_section(nxt: NextPatch, scanned_at: str | None, tz: str | None) -> str:
+    parts = [f'<h3>Next patch run <span class="muted">· preview based on the last scan '
+             f'({_ts(scanned_at, tz)})</span></h3>',
+             f"<p>window: {_e(nxt.when)}<br>would patch: {_e(nxt.summary)}</p>"]
+    if nxt.items:
+        parts.append('<div class="wrap"><table><tr><th>Severity</th><th>Package</th>'
+                     "<th>Installed</th><th>Fixed in</th><th>Vulns</th><th></th></tr>")
+        for i in nxt.items:
+            held = (f'<span class="badge warn">held back</span> {_e(i.skipped)}'
+                    if i.skipped else "")
+            parts.append(f"<tr><td>{_sev(i.severity)}</td><td>{_e(i.source_package)}</td>"
+                         f"<td><code>{_e(i.installed_version)}</code></td>"
+                         f"<td><code>{_e(i.fixed_version)}</code></td>"
+                         f'<td class="num">{len(i.vulns)}</td><td>{held}</td></tr>')
+        parts.append("</table></div>")
+    parts.append('<p class="muted">The patch run itself checks the apt candidates, so it can '
+                 "still hold back a package (mirror behind, blocked candidate).</p>")
+    return "".join(parts)
+
+
+def _next_cell(nxt: NextPatch | None) -> str:
+    if nxt is None:
+        return '<span class="muted">-</span>'
+    return f'{_e(nxt.when)}<br><span class="muted">would patch: {_e(nxt.summary)}</span>'
+
+
 def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict],
                   snapshots: list[dict], min_severity: Severity,
-                  host: HostConfig | None = None, tz: str | None = None) -> str:
+                  host: HostConfig | None = None, tz: str | None = None,
+                  next_patch: NextPatch | None = None) -> str:
     s = rec.summary
     fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
     others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
@@ -195,6 +263,8 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     parts.append(f'<p class="muted">scanned {_ts(rec.scanned_at, tz)} · '
                  f'{_e(s.get("package_count", 0))} packages</p>')
     parts.append(_policy_line(host))
+    if next_patch:
+        parts.append(_next_patch_section(next_patch, rec.scanned_at, tz))
 
     if fixable:
         parts.append('<h3>Fixable now</h3><div class="wrap"><table><tr><th>Severity</th>'
@@ -308,6 +378,10 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
 
     by_name = {h.name: h for h in cfg.hosts}
     history = {rec.host: state.patches(rec.host, PATCH_HISTORY) for rec, _ in records}
+    custom = cfg.raw["sources"].get("custom", {}).get("enabled", False)
+    definitions = stored_definitions(state) if custom else []
+    upcoming = {rec.host: _next_patch(rec, by_name.get(rec.host), definitions, now)
+                for rec, _ in records}
     total = Counter()
     rows = []
     for rec, error in records:
@@ -330,7 +404,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
                     f"<td>{_ts(rec.scanned_at, tz)}</td>"
                     f"<td>{_patch_badge(patch.get('status'))} "
                     f"<span class=\"muted\">{_ts(patch.get('started_at'), tz) if patch else ''}"
-                    "</span></td></tr>"))
+                    f"</span></td><td>{_next_cell(upcoming[rec.host])}</td></tr>"))
     rows.sort()
 
     sources_html = ""
@@ -361,7 +435,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
     hosts_html = "".join(
         _host_section(rec, error, history[rec.host],
                       state.snapshots(rec.host, ("active", "rolled-back")), min_severity,
-                      by_name.get(rec.host), tz)
+                      by_name.get(rec.host), tz, upcoming[rec.host])
         for rec, error in records)
     missing_html = (f'<p class="muted">not scanned yet: {_e(", ".join(missing))}</p>'
                     if missing else "")
@@ -387,13 +461,14 @@ aptwarden {_e(__version__)}
 <h2>Hosts</h2>
 <div class="wrap"><table>
 <tr><th>Host</th><th>Modes</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
-<th>Scanned</th><th>Last patch</th></tr>
+<th>Scanned</th><th>Last patch</th><th>Next patch (preview)</th></tr>
 {"".join(row for _, row in rows)}
 </table></div>
 <p class="muted">Hosts with errors first, then by known exploited, critical and high
-fixable vulnerabilities. Modes and policy: configuration at the time this page was generated
-({_e(_local(now, tz))}). Configuration changes appear after the next
-report or patch run.</p>
+fixable vulnerabilities. Next patch: the next window in the host's time zone and what it
+would patch, a preview based on the last scan. Modes and policy:
+configuration at the time this page was generated ({_e(_local(now, tz))}). Configuration
+changes appear after the next report or patch run.</p>
 {missing_html}
 {sources_html}
 <h2>Host details</h2>

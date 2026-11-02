@@ -2,8 +2,10 @@ from datetime import datetime
 
 import pytest
 
+from aptwarden.definitions import Definition
+from aptwarden.models import Finding, FindingStatus, Severity
 from aptwarden.patch import apt, window
-from aptwarden.patch.planner import parse_show
+from aptwarden.patch.planner import parse_show, preview
 
 SIM = """NOTE: This is only a simulation!
 Reading package lists...
@@ -195,6 +197,23 @@ def test_next_open():
     assert start.isoformat() == "2026-03-29T03:30:00+02:00"
 
 
+def test_next_start():
+    # Monday 2026-11-02 10:00 CET: Tuesday 03:00 CET
+    start = window.next_start(["Mon..Fri 03:00-04:00"], utc("2026-11-02 09:00"), ZH)
+    assert start.isoformat() == "2026-11-03T03:00:00+01:00"
+    # inside a window, the next start is the following one, not now
+    start = window.next_start(["daily 02:00-03:00"], utc("2026-07-01 00:30"), ZH)
+    assert start.isoformat() == "2026-07-02T02:00:00+02:00"
+    # summer time now, winter time at the start (2026-10-25 changes back)
+    start = window.next_start(["Sun 03:00-04:00"], utc("2026-10-24 12:00"), ZH)
+    assert start.strftime("%Y-%m-%d %H:%M %Z") == "2026-10-25 03:00 CET"
+    # the earliest of several windows
+    start = window.next_start(["Sat 03:00-05:00", "Tue,Thu 22:00-23:00"],
+                              utc("2026-11-02 09:00"), ZH)
+    assert start.isoformat() == "2026-11-03T22:00:00+01:00"
+    assert window.next_start([], utc("2026-07-01 00:30"), ZH) is None
+
+
 def test_time_zone_in_config(make_config):
     from aptwarden.config import ConfigError
 
@@ -216,3 +235,35 @@ def test_runner_uses_host_time_zone(make_config):
     _, skipped = r._eligible(cfg.hosts, False, False, utc("2026-07-01 02:30"))   # 04:30 CEST
     assert skipped == [("a", "outside the maintenance window")]
     r.close()
+
+
+BLOCK_CURL = {"id": "AW-2026-0009", "summary": "broken curl update", "severity": "high",
+              "package": "curl", "action": "block",
+              "affected": [{"release": "trixie", "ranges": [{"introduced": "8.1-2",
+                                                             "fixed": "8.1-3"}]}]}
+
+
+def fixable(vid, source, severity, fixed="2", **kw):
+    return Finding(vid, source, "1", FindingStatus.FIXABLE, fixed_version=fixed,
+                   binaries=[source], severity=severity, **kw)
+
+
+def test_preview_filters_like_the_planner():
+    findings = [
+        fixable("CVE-1", "openssl", Severity.CRITICAL),
+        fixable("CVE-2", "openssl", Severity.HIGH),
+        fixable("CVE-3", "tar", Severity.MEDIUM),                    # below the policy
+        fixable("CVE-4", "sudo", Severity.LOW, kev=True),            # KEV: always
+        fixable("CVE-5", "bash", Severity.CRITICAL, action="report"),  # restricted
+        fixable("CVE-6", "curl", Severity.HIGH, fixed="8.1-2"),      # fix blocked
+        Finding("CVE-7", "vim", "1", FindingStatus.NO_FIX, severity=Severity.CRITICAL),
+    ]
+    policy = {"auto_patch_severities": ["critical", "high"], "auto_patch_kev": True}
+    items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "trixie")
+    assert [(i.source_package, i.skipped) for i in items] == [
+        ("openssl", None), ("curl", "fixed version 8.1-2 is blocked by AW-2026-0009"),
+        ("sudo", None)]
+    assert items[0].vulns == ["CVE-1", "CVE-2"]
+    # the block applies to its release only
+    items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "bookworm")
+    assert not any(i.skipped for i in items)

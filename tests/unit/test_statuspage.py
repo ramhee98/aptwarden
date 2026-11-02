@@ -239,3 +239,75 @@ def test_times_in_server_local_time(make_config, server_tz):
 def test_server_zone(monkeypatch):
     monkeypatch.setenv("TZ", ":Europe/Zurich")
     assert window.server_zone() == "Europe/Zurich"
+
+
+def preview_cfg(make_config, **web01_policy):
+    return make_config(
+        policy={"timezone": "Europe/Zurich"},
+        sources={"custom": {"enabled": True}},
+        hosts=[
+            {"name": "web01", "policy": {"modes": ["report", "patch"],
+                                         "window": ["Mon..Fri 03:00-04:00"], **web01_policy},
+             "healthchecks": [{"systemd": "nginx.service"}]},
+            {"name": "ny01", "policy": {"modes": ["patch"], "window": ["Sun 02:00-03:00"],
+                                        "timezone": "America/New_York"},
+             "healthchecks": [{"systemd": "nginx.service"}]},
+            {"name": "any01", "policy": {"modes": ["patch"]},
+             "healthchecks": [{"systemd": "nginx.service"}]},
+            {"name": "rep01"}])
+
+
+def render_preview(cfg, now):
+    from tests.unit.test_patch_apt import BLOCK_CURL, fixable
+
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    state.set(**{"definitions.data": [BLOCK_CURL]})
+    web = [fixable("CVE-2026-1", "openssl", Severity.CRITICAL),
+           fixable("CVE-2026-2", "openssl", Severity.CRITICAL),
+           fixable("CVE-2026-3", "inetutils", Severity.HIGH),
+           fixable("CVE-2026-4", "tar", Severity.MEDIUM),
+           fixable("CVE-2026-5", "curl", Severity.HIGH, fixed="8.1-2")]
+    for host, findings in [("web01", web), ("ny01", web[3:4]), ("any01", web[:1]),
+                           ("rep01", web)]:
+        state.save_host("r1", HostRecord("r1", host, "192.0.2.30", True, None,
+                                         {"codename": "trixie"}, [],
+                                         "2026-11-02T05:00:00+00:00", findings))
+    page = statuspage.render(cfg, state, now=now)
+    state.close()
+    return page
+
+
+def test_next_window_and_preview(make_config):
+    # Monday 2026-11-02 10:00 CET
+    page = render_preview(preview_cfg(make_config), datetime(2026, 11, 2, 9, 0, tzinfo=UTC))
+    table = page.split("<h2>Hosts</h2>")[1].split("<h2>")[0]
+    assert "<th>Next patch (preview)</th>" in table
+    assert ("2026-11-03 03:00 CET<br><span class=\"muted\">would patch: openssl, inetutils "
+            "(2 critical, 1 high)</span>") in table
+    # in the host's own time zone; nothing allowed by its policy
+    assert ("2026-11-08 02:00 EST<br><span class=\"muted\">would patch: nothing (1 fixable, "
+            "none allowed by policy (auto-patch: critical, high + KEV): 1 medium)") in table
+    assert "any time<br>" in table
+    rep_row = next(r for r in table.split("<tr>") if 'href="#rep01"' in r)
+    assert rep_row.endswith('<td><span class="muted">-</span></td></tr>')
+
+    web = page.split('<details id="web01">')[1].split('<details id="ny01">')[0]
+    assert "Next patch run <span class=\"muted\">· preview based on the last scan " \
+           "(2026-11-02 06:00 CET)" in web
+    assert "window: 2026-11-03 03:00 CET<br>would patch: openssl, inetutils" in web
+    assert "held back</span> fixed version 8.1-2 is blocked by AW-2026-0009" in web
+    assert "Next patch run" not in page.split('<details id="rep01">')[1]
+
+
+def test_preview_window_open_and_severity_policy(make_config):
+    # Tuesday 2026-11-03 03:30 CET, inside the window; summer and winter as elsewhere
+    cfg = preview_cfg(make_config, auto_patch_severities=["critical"], auto_patch_kev=False)
+    page = render_preview(cfg, datetime(2026, 11, 3, 2, 30, tzinfo=UTC))
+    assert "open now<br><span class=\"muted\">would patch: openssl (2 critical)</span>" in page
+
+
+def test_preview_in_summer_time(make_config):
+    # Friday 2026-07-03 12:00 CEST: next window Monday 03:00 CEST
+    page = render_preview(preview_cfg(make_config), datetime(2026, 7, 3, 10, 0, tzinfo=UTC))
+    assert "2026-07-06 03:00 CEST<br>" in page

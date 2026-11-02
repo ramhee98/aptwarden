@@ -600,6 +600,8 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   vulnerabilities, then by name
 - per host its policy, as configured when the page was generated, with its maintenance
   windows in the host's own time zone
+- for hosts with `patch` in `policy.modes`, in the table and in the host's details: the
+  start of the next maintenance window and what it would patch (see below)
 - per host: the fixable packages, every vulnerability (collapsible), the patch history
   and aptwarden's snapshots
 - the state of the data sources and definitions, including rejected releases
@@ -640,6 +642,16 @@ status_page:
   path: null             # default: <state_dir>/www/index.html
   mode: "0640"           # e.g. "0644" if another local user serves it
 ```
+
+**Next patch run** shows the start of the next window in the host's time zone (`open now`
+inside a window, `any time` without windows) and a preview such as `would patch: openssl,
+inetutils (2 critical, 1 high)`: the source packages and the number of vulnerabilities per
+severity. The preview applies the planner's selection to the fixable findings of the last
+scan: `auto_patch_severities`, `auto_patch_kev`, definitions restricting a vulnerability
+to `report`, and `block` definitions covering the fixed version (listed as held back). It
+reads only `state.db`, with no SSH connection and no apt simulation, so the patch run can
+still hold back a package once it sees the apt candidates (mirror behind, blocked
+candidate). Changes after the last scan appear with the next report run.
 
 Times on the page (scans, patch runs, snapshots, data sources, when it was generated)
 are shown in the global `policy.timezone` with the zone's abbreviation, e.g.
