@@ -71,6 +71,11 @@ margin:8px 0;padding:8px 12px}
 summary{cursor:pointer;font-weight:600}
 code{font-size:12px}
 ul{margin:4px 0;padding-left:20px}
+.trend svg{display:block;max-width:100%;height:auto;overflow:visible}
+.trend .axis{stroke:var(--line);stroke-width:1}
+.trend polyline{fill:none;stroke-width:1.5;stroke-linejoin:round}
+.trend .total{stroke:var(--muted)}.trend .crit{stroke:var(--crit)}.trend .hi{stroke:var(--high)}
+.trend circle{fill:var(--muted)}.trend circle.hit{fill:transparent;stroke:none}
 .attention{background:var(--card);border:1px solid var(--bad);border-radius:8px;padding:8px 12px}
 .attention li{margin:2px 0}
 """
@@ -253,6 +258,63 @@ def _next_cell(nxt: NextPatch | None) -> str:
     return f'{_e(nxt.when)}<br><span class="muted">would patch: {_e(nxt.summary)}</span>'
 
 
+TREND_W, TREND_H, TREND_PAD = 300, 56, 4
+
+
+def _trend(points: list[tuple[str, int, int, int]], tz: str | None) -> str:
+    """Inline SVG of fixable findings per stored scan: total, critical, high.
+    No script; colours come from the page's CSS variables; <title> carries the
+    values (whole chart and per scan)."""
+    if not points:
+        return ""
+    times = [datetime.fromisoformat(p[0]).timestamp() for p in points]
+    t0, t1 = times[0], times[-1]
+    top = max(max(p[1] for p in points), 1)
+    inner_w, inner_h = TREND_W - 2 * TREND_PAD, TREND_H - 2 * TREND_PAD
+
+    def xy(i: int, value: int) -> str:
+        x = TREND_PAD + (inner_w * (times[i] - t0) / (t1 - t0) if t1 > t0 else inner_w / 2)
+        y = TREND_PAD + inner_h * (1 - value / top)
+        return f"{x:.1f},{y:.1f}"
+
+    def line(col: int, cls: str) -> str:
+        """A step line: a value holds until the next scan."""
+        if len(points) == 1:
+            return ""
+        coords = [xy(0, points[0][col])]
+        for i in range(1, len(points)):
+            coords += [f"{xy(i, points[i - 1][col]).split(',')[0]},"
+                       f"{xy(i - 1, points[i - 1][col]).split(',')[1]}",
+                       xy(i, points[i][col])]
+        return f'<polyline class="{cls}" points="{" ".join(coords)}"/>'
+
+    first, last = _when(points[0][0], tz), _when(points[-1][0], tz)
+    latest = points[-1]
+    span = f"{first} – {last}" if len(points) > 1 else first
+    summary = (f"Fixable vulnerabilities, {len(points)} scan{'s' if len(points) > 1 else ''}, "
+               f"{span}: now {latest[1]} ({latest[2]} critical, {latest[3]} high), "
+               f"highest {max(p[1] for p in points)}")
+    marks = []
+    for i, (when, total, crit, high) in enumerate(points):
+        x, y = xy(i, total).split(",")
+        label = f"{_when(when, tz)}: {total} fixable, {crit} critical, {high} high"
+        dot = '<circle r="2" cx="{x}" cy="{y}"/>' if i == len(points) - 1 else ""
+        marks.append(dot.format(x=x, y=y)
+                     + f'<circle class="hit" r="5" cx="{x}" cy="{y}"><title>{_e(label)}'
+                       "</title></circle>")
+    base = TREND_H - TREND_PAD
+    svg = (f'<svg viewBox="0 0 {TREND_W} {TREND_H}" width="{TREND_W}" height="{TREND_H}" '
+           f'role="img" aria-label="{_e(summary)}"><title>{_e(summary)}</title>'
+           f'<line class="axis" x1="{TREND_PAD}" y1="{base}" x2="{TREND_W - TREND_PAD}" '
+           f'y2="{base}"/>'
+           + line(1, "total") + line(3, "hi") + line(2, "crit") + "".join(marks) + "</svg>")
+    return (f'<div class="trend"><h3>Fixable over time</h3>{svg}'
+            f'<p class="muted">{len(points)} stored scan{"s" if len(points) > 1 else ""}, '
+            f"{_e(span)} · max {top} · <span class=\"sev\">total</span> · "
+            '<span class="sev critical">critical</span> · <span class="sev high">high</span>'
+            " · history limited by keep_runs</p></div>")
+
+
 def last_health(patches: list[dict]) -> tuple[dict, str] | None:
     """(patch run, "health_after" or "health_before") of the newest run that ran
     healthchecks; health_after wins."""
@@ -291,7 +353,8 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
                   snapshots: list[dict], min_severity: Severity,
                   host: HostConfig | None = None, tz: str | None = None,
                   next_patch: NextPatch | None = None,
-                  health: tuple[dict, str] | None = None) -> str:
+                  health: tuple[dict, str] | None = None,
+                  trend: list[tuple[str, int, int, int]] | None = None) -> str:
     s = rec.summary
     fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
     others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
@@ -305,6 +368,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     parts.append(f'<p class="muted">scanned {_ts(rec.scanned_at, tz)} · '
                  f'{_e(s.get("package_count", 0))} packages</p>')
     parts.append(_policy_line(host))
+    parts.append(_trend(trend or [], tz))
     if next_patch:
         parts.append(_next_patch_section(next_patch, rec.scanned_at, tz))
 
@@ -552,7 +616,8 @@ def render(cfg: Config, state: State, now: datetime | None = None,
     hosts_html = "".join(
         _host_section(rec, error, history[rec.host],
                       state.snapshots(rec.host, ("active", "rolled-back")), min_severity,
-                      by_name.get(rec.host), tz, upcoming[rec.host], st.health[rec.host])
+                      by_name.get(rec.host), tz, upcoming[rec.host], st.health[rec.host],
+                      state.fixable_history(rec.host))
         for rec, error in records)
     missing_html = (f'<p class="muted">not scanned yet: {_e(", ".join(missing))}</p>'
                     if missing else "")

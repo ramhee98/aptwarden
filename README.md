@@ -604,6 +604,9 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   start of the next maintenance window and what it would patch (see below)
 - per host: the fixable packages, every vulnerability (collapsible), the patch history
   and aptwarden's snapshots
+- per host: a small chart of the fixable vulnerabilities over the stored scans (total,
+  critical and high), with the period it covers; hovering a point shows its values (see
+  below)
 - per host: the latest healthcheck results, ✓ or ✗ with the detail for each check. They
   come from the newest patch run that ran checks: the results after patching (or after
   the rollback), else those before patching, with the run and its time. Dry runs are not
@@ -656,6 +659,13 @@ to `report`, and `block` definitions covering the fixed version (listed as held 
 reads only `state.db`, with no SSH connection and no apt simulation, so the patch run can
 still hold back a package once it sees the apt candidates (mirror behind, blocked
 candidate). Changes after the last scan appear with the next report run.
+
+**Fixable over time** is an inline SVG, so it needs no script and no external resource;
+its colours follow the light or dark theme. Failed scans are left out. The chart shows
+what `state.db` still holds: `keep_runs` (default 100) counts *every* run, including the
+hourly patch runs, so with the patch timer 100 runs are about four days. For a longer
+history, raise it, e.g. `keep_runs: 2000` for about 80 days; `state.db` then grows by
+the findings of every stored scan.
 
 Times on the page (scans, patch runs, snapshots, data sources, when it was generated)
 are shown in the global `policy.timezone` with the zone's abbreviation, e.g.

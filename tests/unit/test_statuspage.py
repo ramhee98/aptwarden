@@ -431,3 +431,52 @@ def test_healthcheck_results_beyond_the_patch_history(make_config):
     page = statuspage.render(cfg, state)
     state.close()
     assert "· after patching, 2026-10-01 02:00 UTC, run <code>p0</code>" in page
+
+
+def test_fixable_history(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}, {"name": "db01"}, {"name": "new01"}])
+    state = State(cfg.state_dir / "state.db")
+    crit = Finding("CVE-1", "openssl", "1", FindingStatus.FIXABLE, fixed_version="2",
+                   severity=Severity.CRITICAL)
+    high = Finding("CVE-2", "curl", "1", FindingStatus.FIXABLE, fixed_version="2",
+                   severity=Severity.HIGH)
+    low = Finding("CVE-3", "tar", "1", FindingStatus.FIXABLE, fixed_version="2",
+                  severity=Severity.LOW)
+    nofix = Finding("CVE-4", "vim", "1", FindingStatus.NO_FIX, severity=Severity.CRITICAL)
+    scans = [("r1", "2026-07-20T06:00:00+00:00", True, [crit, high, low, nofix]),
+             ("r2", "2026-10-21T06:00:00+00:00", False, []),  # failed scans are left out
+             ("r3", "2026-10-22T06:00:00+00:00", True, [high, low]),
+             ("r4", "2026-11-02T06:00:00+00:00", True, [])]
+    for run_id, when, ok, findings in scans:
+        state.start_run(run_id, "report")
+        state.save_host(run_id, HostRecord(run_id, "web01", "192.0.2.10", ok,
+                                           None if ok else "boom", {}, [], when, findings))
+    state.save_host("r4", HostRecord("r4", "db01", "192.0.2.20", True, None, {}, [],
+                                     "2026-11-02T06:00:00+00:00", [high]))
+    assert state.fixable_history("web01") == [
+        ("2026-07-20T06:00:00+00:00", 3, 1, 1), ("2026-10-22T06:00:00+00:00", 2, 0, 1),
+        ("2026-11-02T06:00:00+00:00", 0, 0, 0)]
+    page = statuspage.render(cfg, state, now=datetime(2026, 11, 2, 7, 0, tzinfo=UTC))
+    state.close()
+
+    web = host_details(page, "web01")
+    svg = web.split("<svg")[1].split("</svg>")[0]
+    # the values in <title>, for the chart and each scan
+    assert ("<title>Fixable vulnerabilities, 3 scans, 2026-07-20 06:00 UTC – 2026-11-02 "
+            "06:00 UTC: now 0 (0 critical, 0 high), highest 3</title>") in svg
+    assert "<title>2026-10-22 06:00 UTC: 2 fixable, 0 critical, 1 high</title>" in svg
+    assert svg.count('<circle class="hit"') == 3
+    assert {'class="total"', 'class="crit"', 'class="hi"'} <= set(
+        re.findall(r'class="\w+"', svg))
+    # the period is stated, colours only through CSS variables
+    assert "3 stored scans, 2026-07-20 06:00 UTC – 2026-11-02 06:00 UTC" in web
+    assert "#" not in svg and "style=" not in svg and "<script" not in svg
+    assert ".trend .crit{stroke:var(--crit)}" in page
+
+    # step line: the value holds until the next scan (y = 4 at 3 of 3, 52 at 0)
+    total = re.search(r'<polyline class="total" points="([^"]+)"', svg)[1].split()
+    assert total[0] == "4.0,4.0" and total[1].endswith(",4.0") and total[-1].endswith(",52.0")
+
+    db = host_details(page, "db01")
+    assert "1 stored scan, 2026-11-02 06:00 UTC" in db and "<polyline" not in db
+    assert '<details id="new01">' not in page  # never scanned: no section, no chart

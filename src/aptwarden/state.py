@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from aptwarden.models import Finding
+from aptwarden.models import Finding, FindingStatus, Severity
 
 SCHEMA_VERSION = 4
 
@@ -189,6 +189,18 @@ class State:
                     "DO UPDATE SET alerted_at = excluded.alerted_at",
                     (host, f.source_package, f.vuln_id, now, now, now),
                 )
+
+    def fixable_history(self, host: str) -> list[tuple[str, int, int, int]]:
+        """(scanned_at, fixable, critical, high) for every stored successful scan
+        of ``host``, oldest first. prune() limits how far back this goes."""
+        return [tuple(r) for r in self.db.execute(
+            "SELECT h.scanned_at, COUNT(f.vuln_id), COALESCE(SUM(f.severity = ?), 0), "
+            "COALESCE(SUM(f.severity = ?), 0) "
+            "FROM host_results h LEFT JOIN findings f "
+            "ON f.run_id = h.run_id AND f.host = h.host AND f.status = ? "
+            "WHERE h.host = ? AND h.ok = 1 GROUP BY h.run_id, h.scanned_at "
+            "ORDER BY h.scanned_at, h.run_id",
+            (int(Severity.CRITICAL), int(Severity.HIGH), str(FindingStatus.FIXABLE), host))]
 
     def latest(self, host: str, ok_only: bool = False) -> HostRecord | None:
         sql = (
