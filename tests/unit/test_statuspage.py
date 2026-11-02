@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import stat
@@ -107,7 +108,8 @@ def test_write_atomic_with_mode(make_config):
     assert path == cfg.state_dir / "www" / "index.html"
     assert path.read_text().startswith("<!doctype html>")
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
-    assert [p.name for p in path.parent.iterdir()] == ["index.html"]  # no temp files left
+    assert sorted(p.name for p in path.parent.iterdir()) == ["index.html", "status.json"]
+    assert stat.S_IMODE(os.stat(path.parent / "status.json").st_mode) == 0o640
 
 
 def test_disabled_and_custom_path(make_config, tmp_path):
@@ -311,3 +313,53 @@ def test_preview_in_summer_time(make_config):
     # Friday 2026-07-03 12:00 CEST: next window Monday 03:00 CEST
     page = render_preview(preview_cfg(make_config), datetime(2026, 7, 3, 10, 0, tzinfo=UTC))
     assert "2026-07-06 03:00 CEST<br>" in page
+
+
+def test_status_json(make_config):
+    names = ["web01", "db01", "mail01", "app01", "new01"]
+    cfg = make_config(hosts=[{"name": n} for n in names])
+    state = State(cfg.state_dir / "state.db")
+    seed(state)  # web01: KEV critical + high fixable, rolled back; db01: scan failed
+    save_scan(state, "mail01")
+    save_patch(state, "p2", "mail01", "needs-manual-rollback", "2026-10-23T02:10:00+00:00",
+               "healthchecks failed")
+    save_scan(state, "app01")
+    for i in range(2):
+        save_patch(state, f"a{i}", "app01", "aborted", f"2026-10-2{i}T02:00:00+00:00", "x")
+    path = statuspage.write(cfg, state)
+    st = statuspage.collect(cfg, state, datetime(2026, 11, 2, 6, 30, tzinfo=UTC))
+    data = statuspage.status_json(st)
+    state.close()
+
+    text = (path.parent / "status.json").read_text()
+    assert json.loads(text)["hosts_detail"] == json.loads(json.dumps(data))["hosts_detail"]
+    # numbers and states only
+    for secret in ("openssl", "inetutils", "CVE-", "192.0.2", "script", "timed out",
+                   "healthchecks failed", "trixie"):
+        assert secret not in text
+    assert data["generated_at"] == "2026-11-02T06:30:00Z"
+    assert {k: v for k, v in data.items() if k not in ("hosts_detail", "aptwarden",
+                                                         "generated_at")} == {
+        "last_run": "r1", "hosts": 4, "hosts_failing": 1, "fixable": 2, "critical": 1,
+        "high": 1, "kev": 1, "needs_attention": 4, "not_scanned": 1}
+    by_name = {h["name"]: h for h in data["hosts_detail"]}
+    assert by_name["web01"] == {
+        "name": "web01", "scan_ok": True, "scanned_at": "2026-10-23T06:00:00Z",
+        "last_patch": "rolled-back", "last_patch_at": "2026-10-23T02:00:00Z", "fixable": 2,
+        "critical": 1, "high": 1, "kev": 1, "needs_attention": 1}
+    assert by_name["db01"]["scan_ok"] is False
+    assert by_name["mail01"]["last_patch"] == "needs-manual-rollback"
+    assert by_name["mail01"]["needs_attention"] == 1
+    assert by_name["app01"]["needs_attention"] == 1  # repeated aborts
+    assert by_name["new01"]["scan_ok"] is None and by_name["new01"]["scanned_at"] is None
+
+
+def test_status_json_all_clear(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    save_scan(state, "web01")
+    data = statuspage.status_json(statuspage.collect(cfg, state))
+    state.close()
+    assert data["needs_attention"] == 0 and data["hosts_failing"] == 0
+    assert data["hosts_detail"][0]["scan_ok"] is True

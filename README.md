@@ -660,6 +660,45 @@ use the central host's local time zone; the page header names the zone used.
 
 `aptwarden status --format html` prints the page to stdout.
 
+### status.json for monitoring
+
+Next to `index.html`, aptwarden writes `status.json`, also atomically and with the same
+`mode`. It contains only numbers and states: host names, but no package names,
+vulnerability texts or addresses.
+
+```json
+{"generated_at": "2026-11-02T06:00:12Z", "last_run": "20261102T060001Z-3f9a",
+ "hosts": 7, "hosts_failing": 0, "fixable": 12, "critical": 0, "high": 3, "kev": 0,
+ "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.1.0",
+ "hosts_detail": [{"name": "web01", "scan_ok": true, "scanned_at": "2026-11-02T06:00:05Z",
+                   "last_patch": "patched", "last_patch_at": "2026-10-30T02:00:41Z",
+                   "fixable": 2, "critical": 0, "high": 1, "kev": 0,
+                   "needs_attention": 0}]}
+```
+
+- Times are UTC in ISO 8601.
+- `hosts` counts scanned hosts, `not_scanned` the configured hosts never scanned.
+- `needs_attention` is the number of entries in the **Needs attention** block.
+- `scan_ok` is `false` when the latest scan failed and `null` before the first one.
+
+The publish unit pushes it together with the page.
+
+**Uptime Kuma**, with a monitor of type *HTTP(s) - Json Query* on
+`https://proxy.example.org/aptwarden/status.json`:
+
+- Under *Authentication*, choose *HTTP Basic Auth* with the nginx credentials. The
+  Uptime Kuma host must be in the location's `allow` list.
+- **Freshness:** set the *Json Query* to
+  `($millis() - $toMillis(generated_at)) < 2 * 3600 * 1000` and the *Expected Value* to
+  `true`. With the hourly patch timer the file is at most about an hour old. With only
+  the daily report timer, allow 26 hours (`26 * 3600 * 1000`). A stale file means the
+  timers or the publish push stopped.
+- **Nothing to do:** a second monitor with the *Json Query* `needs_attention = 0` and the
+  *Expected Value* `true`.
+
+Uptime Kuma 2.x shows the query as *Json Query Expression* with a *Condition*: keep `==`
+and `true`. Both expressions are [JSONata](https://jsonata.org/).
+
 ## Usage
 
 ```

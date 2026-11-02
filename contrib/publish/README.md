@@ -1,12 +1,12 @@
 # Publishing the status page
 
-aptwarden only writes `/var/lib/aptwarden/www/index.html`; it never runs a web
-server. This directory contains the pieces to publish the page on an existing nginx
+aptwarden only writes `/var/lib/aptwarden/www/index.html` and `status.json` next to it;
+it never runs a web server. This directory contains the pieces to publish the page on an existing nginx
 server (e.g. your reverse proxy):
 
-- The **central host pushes** the page whenever it changes, using a dedicated SSH key.
-  The key is restricted on the web server to writing into one directory, so a
-  compromised central host can only overwrite this file. The web server gets no access
+- The **central host pushes** the page and `status.json` whenever they change, using a
+  dedicated SSH key. The key is restricted on the web server to writing into one
+  directory, so a compromised central host can only overwrite these files. The web server gets no access
   to the central host.
 - **nginx** serves it to the LAN only, and only with a password.
 
@@ -63,3 +63,7 @@ From now on every report or patch run updates the page within seconds.
 runuser -u aptwarden -- ssh -i /etc/aptwarden/ssh/publish_ed25519 aptwarden-publish@proxy.example.org
 # from outside the allowed range, the page must answer 403; without a password, 401
 ```
+
+`status.json` sits behind the same allowlist and password. A monitor such as Uptime
+Kuma needs an `allow` line and the credentials (see the main README, "status.json for
+monitoring").

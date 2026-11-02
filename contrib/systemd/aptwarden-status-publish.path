@@ -2,7 +2,8 @@
 Description=Publish the aptwarden status page whenever it changes
 
 [Path]
-# aptwarden replaces the file atomically (rename), which triggers this.
+# aptwarden replaces the files atomically (rename), status.json first, so a
+# change of the page means both are new.
 PathChanged=/var/lib/aptwarden/www/index.html
 
 [Install]

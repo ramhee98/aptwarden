@@ -9,7 +9,9 @@ page forbids scripts through its Content-Security-Policy.
 
 from __future__ import annotations
 
+import contextlib
 import html
+import json
 import logging
 import os
 import tempfile
@@ -327,41 +329,68 @@ def _aborted_streak(history: list[dict]) -> int:
     return n
 
 
-def _attention(records: list[tuple[HostRecord, str | None]],
-               history: dict[str, list[dict]], tz: str | None) -> str:
-    """Everything that needs a human, worst first, each linked to its host."""
+def _attention_items(records: list[tuple[HostRecord, str | None]],
+                     history: dict[str, list[dict]], tz: str | None) -> list[tuple[str, str]]:
+    """(host, html) for everything that needs a human, worst first."""
     failed, scans, kev, aborts = [], [], [], []
     for rec, error in records:
         latest = (history[rec.host] or [{}])[0]
+        link = _host_link(rec.host)
         if latest.get("status") in ATTENTION_PATCH:
-            failed.append(f"<li>{_host_link(rec.host)}: last patch run "
-                          f"{_patch_badge(latest['status'])} {_ts(latest.get('started_at'), tz)}"
-                          f" · {_e(truncate(latest.get('reason', ''), 160))}</li>")
+            failed.append((rec.host, f"{link}: last patch run "
+                           f"{_patch_badge(latest['status'])} "
+                           f"{_ts(latest.get('started_at'), tz)}"
+                           f" · {_e(truncate(latest.get('reason', ''), 160))}"))
         if error:
-            scans.append(f'<li>{_host_link(rec.host)}: <span class="bad">{_e(error)}</span></li>')
+            scans.append((rec.host, f'{link}: <span class="bad">{_e(error)}</span>'))
         for f in sorted(rec.findings, key=lambda f: (-f.severity, f.vuln_id)):
             if f.kev and f.status == FindingStatus.FIXABLE:
-                kev.append(f'<li>{_host_link(rec.host)}: <span class="badge bad">KEV</span> '
-                           f"{_vuln_link(f.vuln_id)} {_sev(f.severity)} in "
-                           f"{_e(f.source_package)}, fixed in "
-                           f"<code>{_e(f.fixed_version or '?')}</code></li>")
+                kev.append((rec.host, f'{link}: <span class="badge bad">KEV</span> '
+                            f"{_vuln_link(f.vuln_id)} {_sev(f.severity)} in "
+                            f"{_e(f.source_package)}, fixed in "
+                            f"<code>{_e(f.fixed_version or '?')}</code>"))
         streak = _aborted_streak(history[rec.host])
         if streak >= REPEATED_ABORTS:
             more = "+" if streak == len(history[rec.host]) == PATCH_HISTORY else ""
-            aborts.append(f"<li>{_host_link(rec.host)}: {_patch_badge('aborted')} "
-                          f"{streak}{more} patch runs in a row · "
-                          f"{_e(truncate(latest.get('reason', ''), 160))}</li>")
-    items = failed + scans + kev + aborts
+            aborts.append((rec.host, f"{link}: {_patch_badge('aborted')} "
+                           f"{streak}{more} patch runs in a row · "
+                           f"{_e(truncate(latest.get('reason', ''), 160))}"))
+    return failed + scans + kev + aborts
+
+
+def _attention(items: list[tuple[str, str]]) -> str:
     if not items:
         return '<p class="good">Nothing needs attention</p>'
-    return '<div class="attention"><ul>' + "".join(items) + "</ul></div>"
+    return ('<div class="attention"><ul>' + "".join(f"<li>{html}</li>" for _, html in items)
+            + "</ul></div>")
 
 
-def render(cfg: Config, state: State, now: datetime | None = None) -> str:
+def _counts(rec: HostRecord) -> dict[str, int]:
+    fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
+    sev = Counter(f.severity for f in fixable)
+    return {"fixable": len(fixable), "critical": sev[Severity.CRITICAL],
+            "high": sev[Severity.HIGH], "kev": sum(1 for f in fixable if f.kev)}
+
+
+@dataclass
+class Status:
+    """Everything the page and status.json are built from."""
+    now: datetime
+    tz: str | None
+    records: list[tuple[HostRecord, str | None]]  # last good scan, error of the latest
+    scanned_at: dict[str, str]  # time of the latest scan attempt
+    missing: list[str]  # configured, never scanned
+    last_run: str | None
+    history: dict[str, list[dict]]
+    upcoming: dict[str, NextPatch | None]
+    attention: list[tuple[str, str]]
+
+
+def collect(cfg: Config, state: State, now: datetime | None = None) -> Status:
     now = now or datetime.now(UTC)
     tz = page_timezone(cfg)
-    min_severity = Severity.parse(cfg.report["min_severity"])
     records: list[tuple[HostRecord, str | None]] = []
+    scanned_at: dict[str, str] = {}
     missing: list[str] = []
     last_run = None
     for h in cfg.hosts:
@@ -375,6 +404,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
         if last_run is None or latest.run_id > last_run:
             last_run = latest.run_id
         records.append((good or latest, error))
+        scanned_at[h.name] = latest.scanned_at
 
     by_name = {h.name: h for h in cfg.hosts}
     history = {rec.host: state.patches(rec.host, PATCH_HISTORY) for rec, _ in records}
@@ -382,25 +412,67 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
     definitions = stored_definitions(state) if custom else []
     upcoming = {rec.host: _next_patch(rec, by_name.get(rec.host), definitions, now)
                 for rec, _ in records}
+    return Status(now, tz, records, scanned_at, missing, last_run, history, upcoming,
+                  _attention_items(records, history, tz))
+
+
+def _utc(value: str | datetime | None) -> str | None:
+    """ISO 8601 in UTC with a Z, as monitoring tools parse it."""
+    if value is None:
+        return None
+    when = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def status_json(st: Status) -> dict:
+    """Numbers and states only: no package names, vulnerability texts or addresses."""
+    attention = Counter(host for host, _ in st.attention)
+    hosts = []
+    for rec, error in st.records:
+        patch = (st.history[rec.host] or [{}])[0]
+        hosts.append({"name": rec.host, "scan_ok": error is None,
+                      "scanned_at": _utc(st.scanned_at[rec.host]),
+                      "last_patch": patch.get("status"),
+                      "last_patch_at": _utc(patch.get("started_at")),
+                      **_counts(rec), "needs_attention": attention[rec.host]})
+    hosts += [{"name": name, "scan_ok": None, "scanned_at": None, "last_patch": None,
+               "last_patch_at": None, "fixable": 0, "critical": 0, "high": 0, "kev": 0,
+               "needs_attention": 0} for name in st.missing]
+    total = Counter()
+    for h in hosts[:len(st.records)]:
+        total.update({k: h[k] for k in ("fixable", "critical", "high", "kev")})
+    return {"generated_at": _utc(st.now), "last_run": st.last_run,
+            "hosts": len(st.records), "hosts_failing": sum(1 for _, e in st.records if e),
+            "fixable": total["fixable"], "critical": total["critical"], "high": total["high"],
+            "kev": total["kev"], "needs_attention": len(st.attention),
+            "not_scanned": len(st.missing), "aptwarden": __version__, "hosts_detail": hosts}
+
+
+def render(cfg: Config, state: State, now: datetime | None = None,
+           st: Status | None = None) -> str:
+    st = st or collect(cfg, state, now)
+    now, tz, records, history, upcoming = st.now, st.tz, st.records, st.history, st.upcoming
+    missing, last_run = st.missing, st.last_run
+    min_severity = Severity.parse(cfg.report["min_severity"])
+    by_name = {h.name: h for h in cfg.hosts}
     total = Counter()
     rows = []
     for rec, error in records:
-        fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
-        sev = Counter(f.severity for f in fixable)
-        kev = sum(1 for f in fixable if f.kev)
+        c = _counts(rec)
         patch = (history[rec.host] or [{}])[0]
-        total.update(hosts=1, fixable=len(fixable), critical=sev[Severity.CRITICAL],
-                     high=sev[Severity.HIGH], kev=kev, errors=1 if error else 0)
+        total.update(hosts=1, errors=1 if error else 0, **c)
         status = ('<span class="badge bad">scan failed</span>' if error
                   else '<span class="badge good">ok</span>')
         failing = bool(error) or patch.get("status") in ATTENTION_PATCH
-        risk = (not failing, -kev, -sev[Severity.CRITICAL], -sev[Severity.HIGH], rec.host)
+        risk = (not failing, -c["kev"], -c["critical"], -c["high"], rec.host)
         rows.append((risk, f'<tr><td>{_host_link(rec.host)}</td>'
                     f"<td>{_modes_badges(by_name.get(rec.host))}</td><td>{status}</td>"
-                    f'<td class="num">{len(fixable)}</td>'
-                    f'<td class="num critical">{sev[Severity.CRITICAL] or ""}</td>'
-                    f'<td class="num high">{sev[Severity.HIGH] or ""}</td>'
-                    f'<td class="num">{kev or ""}</td>'
+                    f'<td class="num">{c["fixable"]}</td>'
+                    f'<td class="num critical">{c["critical"] or ""}</td>'
+                    f'<td class="num high">{c["high"] or ""}</td>'
+                    f'<td class="num">{c["kev"] or ""}</td>'
                     f"<td>{_ts(rec.scanned_at, tz)}</td>"
                     f"<td>{_patch_badge(patch.get('status'))} "
                     f"<span class=\"muted\">{_ts(patch.get('started_at'), tz) if patch else ''}"
@@ -457,7 +529,7 @@ aptwarden {_e(__version__)}
 {f"· latest run {_e(last_run)}" if last_run else ""}</p>
 <div class="tiles">{tiles}</div>
 <h2>Needs attention</h2>
-{_attention(records, history, tz)}
+{_attention(st.attention)}
 <h2>Hosts</h2>
 <div class="wrap"><table>
 <tr><th>Host</th><th>Modes</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
@@ -483,18 +555,33 @@ def output_path(cfg: Config) -> Path:
     return Path(path) if path else cfg.state_dir / "www" / "index.html"
 
 
+def _write_atomic(path: Path, text: str, mode: int) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=path.suffix, dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def write(cfg: Config, state: State) -> Path | None:
-    """Write the page atomically. Never fails a run: errors are only logged."""
+    """Write the page and status.json next to it, each atomically. Never fails
+    a run: errors are only logged. status.json is written first, so whatever
+    watches the page (the publish path unit) finds both up to date."""
     if not cfg.raw["status_page"]["enabled"]:
         return None
     path = output_path(cfg)
+    mode = int(cfg.raw["status_page"]["mode"], 8)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=".index-", suffix=".html", dir=path.parent)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(render(cfg, state))
-        os.chmod(tmp, int(cfg.raw["status_page"]["mode"], 8))
-        os.replace(tmp, path)
+        st = collect(cfg, state)
+        _write_atomic(path.parent / "status.json",
+                      json.dumps(status_json(st), indent=2) + "\n", mode)
+        _write_atomic(path, render(cfg, state, st=st), mode)
     except OSError as e:
         log.error("status page not written", extra={"path": str(path), "error": str(e)})
         return None

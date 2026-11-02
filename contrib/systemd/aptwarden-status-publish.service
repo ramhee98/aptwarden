@@ -5,6 +5,7 @@ Wants=network-online.target
 After=network-online.target
 # Nothing to publish before the first report run wrote the page.
 ConditionPathExists=/var/lib/aptwarden/www/index.html
+ConditionPathExists=/var/lib/aptwarden/www/status.json
 
 [Service]
 Type=oneshot
@@ -17,7 +18,7 @@ EnvironmentFile=/etc/aptwarden/publish.env
 # fails behind rrsync with rsync 3.5 ("could not make way for new regular file").
 ExecStart=/usr/bin/rsync --chmod=F0644 --timeout=60 \
     -e "ssh -i /etc/aptwarden/ssh/publish_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=/var/lib/aptwarden/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=15" \
-    /var/lib/aptwarden/www/index.html ${PUBLISH_TARGET}:
+    /var/lib/aptwarden/www/status.json /var/lib/aptwarden/www/index.html ${PUBLISH_TARGET}:
 
 NoNewPrivileges=yes
 ProtectSystem=strict
