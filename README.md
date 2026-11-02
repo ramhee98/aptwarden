@@ -154,8 +154,11 @@ runuser -u aptwarden -- aptwarden hosts check
 
 Notes on updating:
 
-- **`--force-reinstall` is required** while the version number does not change between
-  commits; without it pip keeps the installed copy.
+- **`--force-reinstall` is required** when the version number did not change since the
+  last install; without it pip keeps the installed copy. To install a release instead
+  of the latest commit, append its tag: `git+https://github.com/ramhee98/aptwarden@v0.2.0`.
+- **`aptwarden version`** shows the installed version; the status page and
+  `status.json` show it too.
 - **State and cache upgrade themselves:** `state.db` and `cache.db` migrate on first
   use. The cache may be rebuilt, which costs one feed download.
 - **The systemd units are not part of the package.** If `contrib/systemd/` changed,
@@ -683,7 +686,7 @@ vulnerability texts or addresses.
 ```json
 {"generated_at": "2026-11-02T06:00:12Z", "last_run": "20261102T060001Z-3f9a",
  "hosts": 7, "hosts_failing": 0, "fixable": 12, "critical": 0, "high": 3, "kev": 0,
- "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.1.0",
+ "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.2.0",
  "hosts_detail": [{"name": "web01", "scan_ok": true, "scanned_at": "2026-11-02T06:00:05Z",
                    "last_patch": "patched", "last_patch_at": "2026-10-30T02:00:41Z",
                    "fixable": 2, "critical": 0, "high": 1, "kev": 0,
@@ -830,6 +833,14 @@ python3 -m venv --system-site-packages .venv
 
 CI runs the unit tests on Python 3.11 to 3.13, and in `debian:12` and `debian:13`
 containers with Debian's packages only.
+
+**Releases:** the version lives only in `src/aptwarden/__init__.py` (`pyproject.toml`
+reads it from there). Raise the minor version for new features or changes to the
+configuration or `status.json`, the patch version for fixes, then tag the commit:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 ## License
 

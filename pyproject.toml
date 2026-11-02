@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aptwarden"
-version = "0.1.0"
+dynamic = ["version"]  # from aptwarden.__version__, the only place to change it
 description = "CVE monitoring and controlled patching for Debian hosts"
 readme = "README.md"
 license = { text = "MIT" }
@@ -20,6 +20,9 @@ dev = ["pytest>=7", "ruff>=0.5"]
 
 [project.scripts]
 aptwarden = "aptwarden.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "aptwarden.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
