@@ -116,3 +116,21 @@ def test_helper_install_script(tmp_path, capsys):
     r = subprocess.run(["sh", str(path)], capture_output=True, text=True, env=env)
     assert r.returncode == 1
     assert "user 'aptwarden' missing" in r.stderr
+
+
+def test_helper_install_script_with_needrestart(capsys):
+    import subprocess
+
+    from aptwarden import cli
+
+    assert cli.main(["helper", "show", "--install"]) == 0
+    plain = capsys.readouterr().out
+    assert cli.main(["helper", "show", "--install", "--with-needrestart"]) == 0
+    with_nr = capsys.readouterr().out
+    assert "apt_install needrestart" not in plain and "use --with-needrestart" in plain
+    assert "apt_install needrestart" in with_nr
+    for script in (plain, with_nr):
+        # sudo goes through the same install-with-retry function
+        assert "apt_install sudo" in script and "apt-get update" in script
+        assert subprocess.run(["sh", "-n"], input=script, text=True).returncode == 0
+    assert cli.main(["helper", "show", "--with-needrestart"]) == 2

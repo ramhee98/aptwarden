@@ -339,7 +339,7 @@ nothing else:
 `aptwarden helper show --install` prints a self-contained script that installs everything
 in one step. Run it as root on the target. The script:
 
-- installs sudo if it is missing,
+- installs sudo if it is missing (and needrestart with `--with-needrestart`),
 - writes helper and sudoers rule with the right owner and mode, and removes misnamed
   rule files (sudo silently ignores files with a dot in their name),
 - validates the rule with `visudo` and checks the helper as user `aptwarden`.
@@ -362,16 +362,16 @@ runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helpe
 
 With `policy.restart: auto` (the default), install `needrestart` too, so that services
 using an updated library are restarted. Without it, a patched host keeps running the
-old code until the next restart. Combined with the installer:
+old code until the next restart. `--with-needrestart` makes the installer take care of
+it:
 
 ```sh
-# via SSH as root
-aptwarden helper show --install | ssh root@TARGET sh && \
-    ssh root@TARGET 'DEBIAN_FRONTEND=noninteractive apt-get install -y needrestart'
-# or through the Proxmox node
-aptwarden helper show --install | ssh root@PVE-NODE pct exec VMID -- sh && \
-    ssh root@PVE-NODE pct exec VMID -- sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y needrestart'
+aptwarden helper show --install --with-needrestart | ssh root@TARGET sh
+aptwarden helper show --install --with-needrestart | ssh root@PVE-NODE pct exec VMID -- sh
 ```
+
+If installing a package fails, for example because of stale package lists, the
+installer runs `apt-get update` once and retries. This applies to sudo and needrestart.
 
 needrestart needs no configuration. During a patch, aptwarden suppresses its apt hook
 and runs it explicitly according to `policy.restart`. For your own `apt` runs it keeps
@@ -616,7 +616,7 @@ aptwarden patch [--dry-run]            patch (see Patching)
 aptwarden rollback --host H            roll back to aptwarden's snapshot
 aptwarden snapshots list | cleanup     aptwarden's snapshots
 aptwarden patches                      patch history
-aptwarden helper show [--install]      the root helper (or its installer) for targets
+aptwarden helper show [--install [--with-needrestart]]   the helper or its installer
 ```
 
 Example (shortened):

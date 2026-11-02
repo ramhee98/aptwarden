@@ -108,6 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
     what.add_argument("--install", action="store_true",
                       help="print a shell script that installs helper and sudoers rule; run "
                            "it as root on the target, e.g. piped into ssh or pct exec")
+    hs.add_argument("--with-needrestart", action="store_true",
+                    help="with --install: also install needrestart if it is missing")
 
     p = sub.add_parser("defs", help="custom vulnerability definitions")
     dsub = p.add_subparsers(dest="defs_command", metavar="SUBCOMMAND", required=True)
@@ -567,11 +569,20 @@ id aptwarden >/dev/null 2>&1 || {{
     echo "  (see README: Target hosts)" >&2
     exit 1
 }}
+# install a package; if that fails (e.g. stale package lists), update once and retry
+apt_install() {{
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$1" >/dev/null; then
+        echo "apt-get install $1 failed, running apt-get update and retrying"
+        apt-get update -q >/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$1" >/dev/null
+    fi
+}}
+
 if ! command -v sudo >/dev/null 2>&1; then
     echo "installing sudo"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -q sudo >/dev/null
+    apt_install sudo
 fi
-
+{needrestart}
 install -d -m 755 -o root -g root /usr/local/lib/aptwarden
 tmp=$(mktemp)
 cat > "$tmp" <<'APTWARDEN_HELPER_EOF'
@@ -596,10 +607,18 @@ out=$(su -s /bin/sh aptwarden -c 'sudo -n {path} version' 2>&1) || true
 if [ "$out" = "aptwarden-helper {helper_version}" ]; then
     echo "ok: $out installed, sudo rule active for user aptwarden"
     command -v needrestart >/dev/null 2>&1 || \
-        echo "note: needrestart is not installed (services are not restarted after updates)"
+        echo "note: needrestart is not installed (services are not restarted after updates;" \
+             "use --with-needrestart)"
 else
     echo "aptwarden: check failed: $out" >&2
     exit 1
+fi
+"""
+
+
+_NEEDRESTART_BLOCK = """if ! command -v needrestart >/dev/null 2>&1; then
+    echo "installing needrestart"
+    apt_install needrestart
 fi
 """
 
@@ -610,6 +629,9 @@ def cmd_helper_show(args) -> int:
     from aptwarden.patch.runner import HELPER_VERSION
 
     files = resources.files("aptwarden")
+    if args.with_needrestart and not args.install:
+        print("aptwarden: --with-needrestart needs --install", file=sys.stderr)
+        return EXIT_USAGE
     if args.install:
         helper = files.joinpath("helper/aptwarden-helper").read_text()
         sudoers = files.joinpath("helper/sudoers").read_text()
@@ -618,7 +640,8 @@ def cmd_helper_show(args) -> int:
                 raise RuntimeError(f"{name} contains its heredoc delimiter")
         sys.stdout.write(_INSTALL_SCRIPT.format(
             version=__version__, helper=helper, sudoers=sudoers, path=HELPER_PATH,
-            helper_version=HELPER_VERSION))
+            helper_version=HELPER_VERSION,
+            needrestart=_NEEDRESTART_BLOCK if args.with_needrestart else ""))
         return EXIT_OK
     name = "helper/sudoers" if args.sudoers else "helper/aptwarden-helper"
     sys.stdout.write(files.joinpath(name).read_text())
