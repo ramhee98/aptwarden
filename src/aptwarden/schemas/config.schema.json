@@ -575,6 +575,15 @@
           "items": {
             "$ref": "#/$defs/healthcheck"
           }
+        },
+        "depends_on": {
+          "description": "Hosts this one depends on (e.g. reverse proxy, DNS): patched first in the same run; if one of them fails there, this host is skipped",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          }
         }
       }
     },

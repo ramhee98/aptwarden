@@ -171,6 +171,7 @@ class HostConfig:
     health: dict = field(default_factory=dict)
     healthchecks: list[dict] = field(default_factory=list)
     snapshot: dict = field(default_factory=lambda: {"provider": "none"})
+    depends_on: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -314,9 +315,37 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
                 health=health,
                 healthchecks=_healthchecks(h, health),
                 snapshot=snapshot,
+                depends_on=list(h.get("depends_on", [])),
             )
         )
+    _check_dependencies(hosts)
     return Config(path=path, raw=merged, hosts=hosts)
+
+
+def _check_dependencies(hosts: list[HostConfig]) -> None:
+    """depends_on must name other configured hosts and must not form a cycle."""
+    by_name = {h.name: h for h in hosts}
+    for h in hosts:
+        for dep in h.depends_on:
+            if dep == h.name:
+                raise ConfigError(f"host {h.name}: depends_on contains the host itself")
+            if dep not in by_name:
+                raise ConfigError(f"host {h.name}: depends_on names unknown host {dep!r}")
+    state: dict[str, int] = {}  # 1 = on the current path, 2 = done
+
+    def visit(name: str, path: list[str]) -> None:
+        if state.get(name) == 2:
+            return
+        if state.get(name) == 1:
+            cycle = path[path.index(name):] + [name]
+            raise ConfigError("depends_on cycle: " + " -> ".join(cycle))
+        state[name] = 1
+        for dep in by_name[name].depends_on:
+            visit(dep, path + [name])
+        state[name] = 2
+
+    for h in hosts:
+        visit(h.name, [])
 
 
 def _healthchecks(host: dict, health: dict) -> list[dict]:

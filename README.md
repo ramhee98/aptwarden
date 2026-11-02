@@ -555,11 +555,38 @@ Mails from patch runs:
 
 Quiet hours cause no mail.
 
-A patch run processes its hosts one after another, without ordering between them. Give
-hosts that others depend on (DNS such as Pi-hole, the reverse proxy) their own window,
-apart from the hosts behind them. Otherwise a restart of the proxy can fail the
-healthchecks of a host behind it. An unimportant host patched a day earlier works as a
-canary for bad package updates.
+### Dependencies between hosts (`depends_on`)
+
+A patch run processes its hosts one after another, in the order of the configuration.
+`depends_on` names hosts that must be patched first:
+
+```yaml
+hosts:
+  - name: wordpress01
+    depends_on: [proxy01, pihole01]
+```
+
+- **Order:** dependencies in the same run are patched before the hosts that depend on
+  them. Hosts without dependencies keep the configured order.
+- **Failed dependency:** when a dependency ends the run `rolled-back`,
+  `needs-manual-rollback`, `failed`, `rollback-failed` or `aborted`, its dependents are
+  skipped with the reason `dependency proxy01 rolled-back`. They are not touched and
+  cause no alert of their own; the dependency's alert covers it. This carries on to
+  hosts depending on a skipped one.
+- **Dependency not in the run:** outside its window, without `patch` in its modes or not
+  selected with `--host`, it does not hold anything back; the host is patched as usual.
+- **Dry run:** `aptwarden patch --dry-run` shows the patch order and which hosts would be
+  skipped if a dependency fails.
+
+Unknown host names, a host depending on itself, and cycles are configuration errors.
+
+A dependent host starts only after its dependency has passed its own healthchecks. For
+dependencies that may reboot (`reboot: if-required`; DNS such as Pi-hole, the reverse
+proxy), separate windows are still the recommended setup: give them their own window,
+apart from the hosts behind them. A reboot then interrupts the services behind them on
+its own, and problems that show only hours later turn up before the hosts behind them
+are patched. An unimportant host patched a day earlier works the same way as a canary
+for bad package updates.
 
 ## Status page
 
@@ -675,8 +702,8 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
   a node cannot snapshot itself.
 - **`enforce_block: pin` is not implemented yet:** blocked versions are never installed
   by aptwarden, but manual `apt` runs are not prevented.
-- **No ordering or dependencies between hosts** in a patch run, see
-  [Timer and maintenance windows](#timer-and-maintenance-windows).
+- **`depends_on` only orders hosts within one patch run,** it does not link runs or
+  windows, see [Dependencies between hosts](#dependencies-between-hosts-depends_on).
 
 ## Development
 

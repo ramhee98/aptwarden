@@ -137,6 +137,7 @@ hosts:
   - name: wordpress01
     address: 192.0.2.14
     snapshot: {provider: proxmox, vmid: 104, type: lxc}
+    depends_on: [proxy01]             # patched after proxy01, skipped if proxy01 fails
     policy:
       modes: [report, dry-run, patch]
       window: ["Mon..Fri 03:00-04:00"]

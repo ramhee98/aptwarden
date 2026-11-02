@@ -27,6 +27,11 @@ def test_defaults_and_host_inheritance(make_config, tmp_path):
         ({"sources": {"debian_tracker": {"refresh_interval": "1 hour"}}}, "refresh_interval"),
         ({"hosts": [{"name": "a"}, {"name": "a"}]}, "duplicate"),
         ({"unknown_key": 1}, "unknown_key"),
+        ({"hosts": [{"name": "a", "depends_on": ["b"]}]}, "unknown host 'b'"),
+        ({"hosts": [{"name": "a", "depends_on": ["a"]}]}, "the host itself"),
+        ({"hosts": [{"name": "a", "depends_on": ["b"]}, {"name": "b", "depends_on": ["c"]},
+                    {"name": "c", "depends_on": ["a"]}]}, "cycle: a -> b -> c -> a"),
+        ({"hosts": [{"name": "a", "depends_on": "b"}]}, "not of type 'array'"),
     ],
 )
 def test_invalid_configs(make_config, overrides, message):
@@ -81,3 +86,10 @@ def test_read_secret_prefers_credentials_directory(tmp_path, monkeypatch):
     assert read_secret("nvd", tmp_path) == "from-config-dir"
     with pytest.raises(ConfigError):
         read_secret("missing", tmp_path)
+
+
+def test_depends_on(make_config):
+    cfg = make_config(hosts=[{"name": "web01", "depends_on": ["proxy01", "dns01"]},
+                             {"name": "proxy01", "depends_on": ["dns01"]}, {"name": "dns01"}])
+    assert cfg.select_hosts(["web01"])[0].depends_on == ["proxy01", "dns01"]
+    assert cfg.select_hosts(["dns01"])[0].depends_on == []

@@ -36,6 +36,31 @@ from aptwarden.transport import TransportFactory
 log = logging.getLogger(__name__)
 
 
+# A dependency ending in one of these makes its dependents skip the run.
+FAILED_DEPENDENCY = ALERT_STATUSES | {"aborted"}
+
+
+def order_by_dependencies(hosts: list[HostConfig]) -> list[HostConfig]:
+    """Dependencies within ``hosts`` first, otherwise the given (config) order.
+    Dependencies outside ``hosts`` are ignored. Cycles are rejected at config
+    load."""
+    names = {h.name for h in hosts}
+    placed: set[str] = set()
+    ordered: list[HostConfig] = []
+    pending = list(hosts)
+    while pending:
+        for h in pending:
+            if all(d in placed or d not in names for d in h.depends_on):
+                ordered.append(h)
+                placed.add(h.name)
+                pending.remove(h)
+                break
+        else:  # unreachable with a validated config; keep the rest as given
+            ordered += pending
+            break
+    return ordered
+
+
 def new_run_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(2)
 
@@ -290,12 +315,35 @@ class Runner:
             self._report(run, eligible, False)
             runner = self._patch_runner or PatchRunner(self.state, self.definitions())
             factory = self._transports or TransportFactory()
+            ordered = order_by_dependencies(eligible)
+            names = {h.name for h in ordered}
+            if any(d in names for h in ordered for d in h.depends_on):
+                run.notes.append("patch order: " + ", ".join(h.name for h in ordered))
+                if dry_run:
+                    run.notes += [
+                        f"{h.name} is skipped if {', '.join(d for d in h.depends_on if d in names)}"
+                        " fails" for h in ordered if any(d in names for d in h.depends_on)]
+            done: dict[str, HostPatchResult] = {}
+            blocked: set[str] = set()  # skipped because a dependency failed
             try:
-                for h in eligible:
-                    if severities is not None:
-                        h = replace(h, policy={**h.policy, "auto_patch_severities": severities,
-                                               "severity_override": True})
-                    run.patches.append(self._patch_host(run, h, runner, factory, dry_run))
+                for h in ordered:
+                    failed = next((d for d in h.depends_on if d in blocked or (
+                        d in done and done[d].status in FAILED_DEPENDENCY)), None)
+                    if failed:
+                        status = "skipped" if failed in blocked else done[failed].status
+                        result = HostPatchResult(h.name, run.run_id, dry_run, "skipped",
+                                                 reason=f"dependency {failed} {status}")
+                        blocked.add(h.name)
+                        log.warning("patch skipped", extra={"host": h.name,
+                                                            "reason": result.reason})
+                    else:
+                        if severities is not None:
+                            h = replace(h, policy={**h.policy,
+                                                   "auto_patch_severities": severities,
+                                                   "severity_override": True})
+                        result = self._patch_host(run, h, runner, factory, dry_run)
+                    done[h.name] = result
+                    run.patches.append(result)
             finally:
                 if self._transports is None:
                     factory.cleanup()

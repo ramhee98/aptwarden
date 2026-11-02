@@ -10,7 +10,7 @@ import pytest
 
 from aptwarden.notify import Message, Notifier, noteworthy_patches
 from aptwarden.patch.runner import HostPatchResult, PatchRunner
-from aptwarden.runner import Runner, RunReport, _PatchLock
+from aptwarden.runner import Runner, RunReport, _PatchLock, order_by_dependencies
 from aptwarden.snapshot import SnapshotError, SnapshotRef, snapshot_name
 from aptwarden.snapshot.proxmox import ProxmoxClient, ProxmoxSnapshots
 from aptwarden.sources import SourceStatus
@@ -328,4 +328,104 @@ def test_runner_override_is_per_run(make_config, monkeypatch):
     # the configuration itself is untouched
     assert cfg.select_hosts(["web01"])[0].policy["auto_patch_severities"] == ["critical", "high"]
     assert "severity_override" not in cfg.select_hosts(["web01"])[0].policy
+    runner.close()
+
+
+def dependency_cfg(make_config, *hosts):
+    return make_config(hosts=[
+        {"name": name, "depends_on": deps, "policy": {"modes": ["patch"]},
+         "healthchecks": [{"systemd": "ssh.service"}]} for name, deps in hosts],
+        sources={"debian_tracker": {"enabled": False}, "osv": {"enabled": False}},
+        enrich={"cvss": {"enabled": False}, "kev": {"enabled": False}})
+
+
+def dependency_runner(cfg, monkeypatch, statuses):
+    """Runner whose PatchRunner records the patched hosts and answers with
+    ``statuses[host]`` (default patched)."""
+    h = openssl_host()
+    patched = []
+
+    class Factory:
+        def create(self, host):
+            return ScriptedTransport(h)
+
+        def cleanup(self):
+            pass
+
+    class Capture(PatchRunner):
+        def run(self, host, inv, findings, run_id, transport, provider, dry_run=False):
+            patched.append(host.name)
+            return HostPatchResult(host.name, run_id, dry_run,
+                                   status=statuses.get(host.name, "patched"))
+
+    runner = Runner(cfg, transports=Factory(), providers=lambda host: FakeProvider(h),
+                    patch_runner=Capture(None, []))
+
+    def fake_report(run, hosts, force):
+        run.sources = [SourceStatus("debian_tracker")]
+        for host in hosts:
+            run.hosts.append(HostRecord(run.run_id, host.name, "x", True, None, {}, [], "now", []))
+            run.inventories[host.name] = inventory(h)
+        run.status = "ok"
+
+    monkeypatch.setattr(runner, "_report", fake_report)
+    return runner, patched
+
+
+def test_order_by_dependencies(make_config):
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("mail01", []),
+                         ("proxy01", ["dns01"]), ("dns01", []), ("app01", ["dns01"]))
+    assert [h.name for h in order_by_dependencies(cfg.hosts)] == [
+        "mail01", "dns01", "proxy01", "web01", "app01"]
+    # without dependencies, the configured order stays
+    cfg = dependency_cfg(make_config, ("b", []), ("a", []), ("c", []))
+    assert [h.name for h in order_by_dependencies(cfg.hosts)] == ["b", "a", "c"]
+    # a dependency outside the run does not hold anything back
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("proxy01", []))
+    assert [h.name for h in order_by_dependencies(cfg.select_hosts(["web01"]))] == ["web01"]
+
+
+@pytest.mark.parametrize("status", ["rolled-back", "failed", "aborted"])
+def test_failed_dependency_skips_dependents(make_config, monkeypatch, status):
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("blog01", ["web01"]),
+                         ("proxy01", []), ("mail01", []))
+    runner, patched = dependency_runner(cfg, monkeypatch, {"proxy01": status})
+    run = runner.patch(cfg.hosts, ignore_window=True, notify=False)
+    assert patched == ["proxy01", "mail01"]
+    by_host = {p.host: p for p in run.patches}
+    assert by_host["web01"].status == "skipped"
+    assert by_host["web01"].reason == f"dependency proxy01 {status}"
+    assert by_host["blog01"].reason == "dependency web01 skipped"  # transitively
+    assert "patch order: proxy01, web01, blog01, mail01" in run.notes
+    runner.close()
+
+
+def test_harmless_dependency_results_do_not_skip(make_config, monkeypatch):
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("proxy01", []))
+    runner, patched = dependency_runner(cfg, monkeypatch, {"proxy01": "nothing-to-do"})
+    run = runner.patch(cfg.hosts, ignore_window=True, notify=False)
+    assert patched == ["proxy01", "web01"]
+    assert run.status == "ok"
+    runner.close()
+
+
+def test_dependency_outside_the_run(make_config, monkeypatch):
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("proxy01", []))
+    proxy = cfg.select_hosts(["proxy01"])[0]
+    proxy.policy["window"] = ["Sat 02:00-03:00"]  # closed on a Monday noon
+    runner, patched = dependency_runner(cfg, monkeypatch, {})
+    run = runner.patch(cfg.hosts, now=datetime(2026, 10, 19, 12, 0), notify=False)
+    assert patched == ["web01"]
+    assert {p.host: p.status for p in run.patches} == {"proxy01": "skipped", "web01": "patched"}
+    assert not any(n.startswith("patch order") for n in run.notes)
+    runner.close()
+
+
+def test_dry_run_shows_order_and_dependents(make_config, monkeypatch):
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("proxy01", []))
+    runner, patched = dependency_runner(cfg, monkeypatch, {})
+    run = runner.patch(cfg.hosts, dry_run=True, notify=False)
+    assert patched == ["proxy01", "web01"]
+    assert run.notes[:2] == ["patch order: proxy01, web01",
+                             "web01 is skipped if proxy01 fails"]
     runner.close()
