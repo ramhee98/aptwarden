@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,25 @@ class FakeFactory:
 
     def cleanup(self):
         pass
+
+
+# The server's local time zone during tests: neither UTC (as on the CI runners)
+# nor a zone the tests configure (Europe/Zurich, America/New_York), so code
+# that falls back to the local zone by mistake fails everywhere, not only on CI.
+TEST_SERVER_TZ = "Asia/Kolkata"
+
+
+@pytest.fixture(autouse=True)
+def server_tz(monkeypatch):
+    """Set the server's local time zone; returns a setter for other zones."""
+    def set_tz(name):
+        monkeypatch.setenv("TZ", name)
+        time.tzset()
+
+    set_tz(TEST_SERVER_TZ)
+    yield set_tz
+    monkeypatch.undo()
+    time.tzset()
 
 
 @pytest.fixture

@@ -2,7 +2,6 @@ import json
 import os
 import re
 import stat
-import time
 from datetime import UTC, datetime
 
 import pytest
@@ -14,16 +13,9 @@ from aptwarden.state import HostRecord, State
 
 
 @pytest.fixture(autouse=True)
-def server_tz(monkeypatch):
-    """The server's local time zone, UTC unless a test sets another one."""
-    def set_tz(name):
-        monkeypatch.setenv("TZ", name)
-        time.tzset()
-
-    set_tz("UTC")
-    yield set_tz
-    monkeypatch.undo()
-    time.tzset()
+def utc_server(server_tz):
+    """The page's times here are in the server's zone: UTC unless a test sets another."""
+    server_tz("UTC")
 
 
 EVIL = '<script>alert(1)</script><img src=x onerror=alert(2)> "quoted" & more'

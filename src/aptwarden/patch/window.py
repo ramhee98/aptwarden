@@ -133,7 +133,7 @@ def next_open(windows: list[str] | None, now: datetime | None = None,
     if not windows:
         return None
     local = local_now(tz, now)
-    if in_any(windows, local):
+    if in_any(windows, local, tz):
         return local, True
     start = next_start(windows, local, tz)
     return (start, False) if start else None
