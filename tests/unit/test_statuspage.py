@@ -363,3 +363,71 @@ def test_status_json_all_clear(make_config):
     state.close()
     assert data["needs_attention"] == 0 and data["hosts_failing"] == 0
     assert data["hosts_detail"][0]["scan_ok"] is True
+
+
+def save_health(state, run_id, host, status, started, **health):
+    state.save_patch(run_id, host, status, started,
+                     {"run_id": run_id, "status": status, "started_at": started,
+                      "reason": "", "items": [], **health})
+
+
+def host_details(page, host):
+    return page.split(f'<details id="{host}">')[1].split("</details>\n")[0]
+
+
+def test_latest_healthcheck_results(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}, {"name": "db01"}, {"name": "new01"}])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    for host in ("web01", "db01", "new01"):
+        save_scan(state, host)
+    # web01: an older run with results after patching, then one with only "before"
+    # results, then a run without healthchecks (nothing to do)
+    save_health(state, "p1", "web01", "patched", "2026-10-20T02:00:00+00:00",
+                health_before=["systemd nginx.service: ok (active)"],
+                health_after=["systemd nginx.service: ok (active)"])
+    save_health(state, "p2", "web01", "aborted", "2026-10-21T02:00:00+00:00",
+                health_before=["systemd nginx.service: ok (active)",
+                               "http https://web01.example.org/: FAILED (HTTP 502: "
+                               f"{EVIL})",
+                               "tcp 192.0.2.10:443: ok"])
+    save_health(state, "p3", "web01", "nothing-to-do", "2026-10-22T02:00:00+00:00")
+    # db01: rolled back, health_after wins over health_before
+    save_health(state, "p4", "db01", "rolled-back", "2026-10-22T02:00:00+00:00",
+                health_before=["systemd postgresql.service: FAILED (inactive)"],
+                health_after=["systemd postgresql.service: ok (active)", "garbage line"])
+    page = statuspage.render(cfg, state)
+    state.close()
+
+    web = host_details(page, "web01")
+    assert ('<h3>Healthchecks <span class="muted">· before patching, 2026-10-21 02:00 UTC, '
+            'run <code>p2</code></span> <span class="badge warn">aborted</span></h3>') in web
+    assert ('<li><span class="good">✓</span> <code>systemd nginx.service</code> '
+            '<span class="muted">active</span></li>') in web
+    # the check name keeps its colon; the detail is escaped
+    assert ('<li><span class="bad">✗</span> <code>http https://web01.example.org/</code> '
+            '<span class="muted">HTTP 502: &lt;script&gt;') in web
+    assert "<script" not in page
+    assert '<li><span class="good">✓</span> <code>tcp 192.0.2.10:443</code></li>' in web
+
+    db = host_details(page, "db01")
+    assert "· after the rollback, 2026-10-22 02:00 UTC, run <code>p4</code>" in db
+    assert "postgresql.service</code> <span class=\"muted\">active</span>" in db
+    assert "inactive" not in db
+    assert '<li><span class="muted">?</span> garbage line</li>' in db
+
+    assert "<h3>Healthchecks" not in host_details(page, "new01")
+
+
+def test_healthcheck_results_beyond_the_patch_history(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    save_scan(state, "web01")
+    save_health(state, "p0", "web01", "patched", "2026-10-01T02:00:00+00:00",
+                health_after=["systemd ssh.service: ok (active)"])
+    for day in range(10, 20):  # more runs without checks than the history shows
+        save_health(state, f"n{day}", "web01", "nothing-to-do", f"2026-10-{day}T02:00:00+00:00")
+    page = statuspage.render(cfg, state)
+    state.close()
+    assert "· after patching, 2026-10-01 02:00 UTC, run <code>p0</code>" in page

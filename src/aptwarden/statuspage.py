@@ -14,6 +14,7 @@ import html
 import json
 import logging
 import os
+import re
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
@@ -80,6 +81,10 @@ _PATCH_CLASS = {"patched": "good", "dry-run": "muted", "nothing-to-do": "muted",
 ATTENTION_PATCH = ("needs-manual-rollback", "rollback-failed", "failed")
 REPEATED_ABORTS = 2  # consecutive aborted patch runs before they need attention
 PATCH_HISTORY = 5  # patch runs shown per host
+HEALTH_LOOKBACK = 50  # patch runs searched for the latest healthcheck results
+# health.CheckResult as stored: "systemd nginx.service: ok (active)"; the
+# shortest check name, so a detail containing ": FAILED" stays in the detail
+_CHECK = re.compile(r"^(?P<check>.*?): (?P<state>ok|FAILED)(?: \((?P<detail>.*)\))?$", re.S)
 
 
 def _e(value) -> str:
@@ -248,10 +253,45 @@ def _next_cell(nxt: NextPatch | None) -> str:
     return f'{_e(nxt.when)}<br><span class="muted">would patch: {_e(nxt.summary)}</span>'
 
 
+def last_health(patches: list[dict]) -> tuple[dict, str] | None:
+    """(patch run, "health_after" or "health_before") of the newest run that ran
+    healthchecks; health_after wins."""
+    for p in patches:
+        for key in ("health_after", "health_before"):
+            if p.get(key):
+                return p, key
+    return None
+
+
+def _health_section(found: tuple[dict, str], tz: str | None) -> str:
+    p, key = found
+    if key == "health_before":
+        when = "before patching"
+    elif p.get("status") == "rolled-back":
+        when = "after the rollback"
+    else:
+        when = "after patching"
+    parts = [f'<h3>Healthchecks <span class="muted">· {when}, '
+             f"{_ts(p.get('started_at'), tz)}, run <code>{_e(p.get('run_id', '?'))}</code>"
+             f"</span> {_patch_badge(p.get('status'))}</h3><ul>"]
+    for line in p[key]:
+        m = _CHECK.match(str(line))
+        if m is None:
+            parts.append(f'<li><span class="muted">?</span> {_e(line)}</li>')
+            continue
+        mark = ('<span class="good">✓</span>' if m["state"] == "ok"
+                else '<span class="bad">✗</span>')
+        detail = f' <span class="muted">{_e(m["detail"])}</span>' if m["detail"] else ""
+        parts.append(f"<li>{mark} <code>{_e(m['check'])}</code>{detail}</li>")
+    parts.append("</ul>")
+    return "".join(parts)
+
+
 def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict],
                   snapshots: list[dict], min_severity: Severity,
                   host: HostConfig | None = None, tz: str | None = None,
-                  next_patch: NextPatch | None = None) -> str:
+                  next_patch: NextPatch | None = None,
+                  health: tuple[dict, str] | None = None) -> str:
     s = rec.summary
     fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
     others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
@@ -297,6 +337,8 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
                      "<th>Description</th></tr>"
                      + _finding_rows(notable, fixed_column=False) + "</table></div></details>")
 
+    if health:
+        parts.append(_health_section(health, tz))
     if patches:
         parts.append('<h3>Patch history</h3><div class="wrap"><table><tr><th>Started</th>'
                      "<th>Status</th><th>Packages</th><th>Snapshot</th><th>Reason</th></tr>")
@@ -384,6 +426,7 @@ class Status:
     history: dict[str, list[dict]]
     upcoming: dict[str, NextPatch | None]
     attention: list[tuple[str, str]]
+    health: dict[str, tuple[dict, str] | None]  # latest healthcheck results per host
 
 
 def collect(cfg: Config, state: State, now: datetime | None = None) -> Status:
@@ -412,8 +455,10 @@ def collect(cfg: Config, state: State, now: datetime | None = None) -> Status:
     definitions = stored_definitions(state) if custom else []
     upcoming = {rec.host: _next_patch(rec, by_name.get(rec.host), definitions, now)
                 for rec, _ in records}
+    health = {rec.host: last_health(history[rec.host])
+              or last_health(state.patches(rec.host, HEALTH_LOOKBACK)) for rec, _ in records}
     return Status(now, tz, records, scanned_at, missing, last_run, history, upcoming,
-                  _attention_items(records, history, tz))
+                  _attention_items(records, history, tz), health)
 
 
 def _utc(value: str | datetime | None) -> str | None:
@@ -507,7 +552,7 @@ def render(cfg: Config, state: State, now: datetime | None = None,
     hosts_html = "".join(
         _host_section(rec, error, history[rec.host],
                       state.snapshots(rec.host, ("active", "rolled-back")), min_severity,
-                      by_name.get(rec.host), tz, upcoming[rec.host])
+                      by_name.get(rec.host), tz, upcoming[rec.host], st.health[rec.host])
         for rec, error in records)
     missing_html = (f'<p class="muted">not scanned yet: {_e(", ".join(missing))}</p>'
                     if missing else "")

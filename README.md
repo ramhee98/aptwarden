@@ -604,6 +604,10 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   start of the next maintenance window and what it would patch (see below)
 - per host: the fixable packages, every vulnerability (collapsible), the patch history
   and aptwarden's snapshots
+- per host: the latest healthcheck results, ✓ or ✗ with the detail for each check. They
+  come from the newest patch run that ran checks: the results after patching (or after
+  the rollback), else those before patching, with the run and its time. Dry runs are not
+  stored, so they do not appear here
 - the state of the data sources and definitions, including rejected releases
 
 **Needs attention** lists, worst first, everything that needs a human. Each entry links
