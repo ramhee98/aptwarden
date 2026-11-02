@@ -64,10 +64,16 @@ margin:8px 0;padding:8px 12px}
 summary{cursor:pointer;font-weight:600}
 code{font-size:12px}
 ul{margin:4px 0;padding-left:20px}
+.attention{background:var(--card);border:1px solid var(--bad);border-radius:8px;padding:8px 12px}
+.attention li{margin:2px 0}
 """
 
 _PATCH_CLASS = {"patched": "good", "dry-run": "muted", "nothing-to-do": "muted",
                 "skipped": "muted", "aborted": "warn"}
+# A latest patch run in one of these needs a human; rolled-back fixed itself.
+ATTENTION_PATCH = ("needs-manual-rollback", "rollback-failed", "failed")
+REPEATED_ABORTS = 2  # consecutive aborted patch runs before they need attention
+PATCH_HISTORY = 5  # patch runs shown per host
 
 
 def _e(value) -> str:
@@ -206,6 +212,49 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     return "".join(parts)
 
 
+def _host_link(name: str) -> str:
+    return f'<a href="#{_e(name)}">{_e(name)}</a>'
+
+
+def _aborted_streak(history: list[dict]) -> int:
+    n = 0
+    for p in history:
+        if p.get("status") != "aborted":
+            break
+        n += 1
+    return n
+
+
+def _attention(records: list[tuple[HostRecord, str | None]],
+               history: dict[str, list[dict]]) -> str:
+    """Everything that needs a human, worst first, each linked to its host."""
+    failed, scans, kev, aborts = [], [], [], []
+    for rec, error in records:
+        latest = (history[rec.host] or [{}])[0]
+        if latest.get("status") in ATTENTION_PATCH:
+            failed.append(f"<li>{_host_link(rec.host)}: last patch run "
+                          f"{_patch_badge(latest['status'])} {_ts(latest.get('started_at'))}"
+                          f" · {_e(truncate(latest.get('reason', ''), 160))}</li>")
+        if error:
+            scans.append(f'<li>{_host_link(rec.host)}: <span class="bad">{_e(error)}</span></li>')
+        for f in sorted(rec.findings, key=lambda f: (-f.severity, f.vuln_id)):
+            if f.kev and f.status == FindingStatus.FIXABLE:
+                kev.append(f'<li>{_host_link(rec.host)}: <span class="badge bad">KEV</span> '
+                           f"{_vuln_link(f.vuln_id)} {_sev(f.severity)} in "
+                           f"{_e(f.source_package)}, fixed in "
+                           f"<code>{_e(f.fixed_version or '?')}</code></li>")
+        streak = _aborted_streak(history[rec.host])
+        if streak >= REPEATED_ABORTS:
+            more = "+" if streak == len(history[rec.host]) == PATCH_HISTORY else ""
+            aborts.append(f"<li>{_host_link(rec.host)}: {_patch_badge('aborted')} "
+                          f"{streak}{more} patch runs in a row · "
+                          f"{_e(truncate(latest.get('reason', ''), 160))}</li>")
+    items = failed + scans + kev + aborts
+    if not items:
+        return '<p class="good">Nothing needs attention</p>'
+    return '<div class="attention"><ul>' + "".join(items) + "</ul></div>"
+
+
 def render(cfg: Config, state: State, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     min_severity = Severity.parse(cfg.report["min_severity"])
@@ -224,18 +273,21 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
         records.append((good or latest, error))
 
     by_name = {h.name: h for h in cfg.hosts}
+    history = {rec.host: state.patches(rec.host, PATCH_HISTORY) for rec, _ in records}
     total = Counter()
     rows = []
     for rec, error in records:
         fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
         sev = Counter(f.severity for f in fixable)
         kev = sum(1 for f in fixable if f.kev)
-        patch = (state.patches(rec.host, 1) or [{}])[0]
+        patch = (history[rec.host] or [{}])[0]
         total.update(hosts=1, fixable=len(fixable), critical=sev[Severity.CRITICAL],
                      high=sev[Severity.HIGH], kev=kev, errors=1 if error else 0)
         status = ('<span class="badge bad">scan failed</span>' if error
                   else '<span class="badge good">ok</span>')
-        rows.append(f'<tr><td><a href="#{_e(rec.host)}">{_e(rec.host)}</a></td>'
+        failing = bool(error) or patch.get("status") in ATTENTION_PATCH
+        risk = (not failing, -kev, -sev[Severity.CRITICAL], -sev[Severity.HIGH], rec.host)
+        rows.append((risk, f'<tr><td>{_host_link(rec.host)}</td>'
                     f"<td>{_modes_badges(by_name.get(rec.host))}</td><td>{status}</td>"
                     f'<td class="num">{len(fixable)}</td>'
                     f'<td class="num critical">{sev[Severity.CRITICAL] or ""}</td>'
@@ -244,7 +296,8 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
                     f"<td>{_ts(rec.scanned_at)}</td>"
                     f"<td>{_patch_badge(patch.get('status'))} "
                     f"<span class=\"muted\">{_ts(patch.get('started_at')) if patch else ''}"
-                    "</span></td></tr>")
+                    "</span></td></tr>"))
+    rows.sort()
 
     sources_html = ""
     info = state.run_info(last_run) if last_run else None
@@ -272,7 +325,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
                         (total["errors"], "hosts failing", "bad" if total["errors"] else "good"),
                     ])
     hosts_html = "".join(
-        _host_section(rec, error, state.patches(rec.host, 5),
+        _host_section(rec, error, history[rec.host],
                       state.snapshots(rec.host, ("active", "rolled-back")), min_severity,
                       by_name.get(rec.host))
         for rec, error in records)
@@ -294,13 +347,16 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
 <p class="muted">generated {_e(now.strftime("%Y-%m-%d %H:%M UTC"))} · aptwarden {_e(__version__)}
 {f"· latest run {_e(last_run)}" if last_run else ""}</p>
 <div class="tiles">{tiles}</div>
+<h2>Needs attention</h2>
+{_attention(records, history)}
 <h2>Hosts</h2>
 <div class="wrap"><table>
 <tr><th>Host</th><th>Modes</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
 <th>Scanned</th><th>Last patch</th></tr>
-{"".join(rows)}
+{"".join(row for _, row in rows)}
 </table></div>
-<p class="muted">Modes and policy: configuration at the time this page was generated
+<p class="muted">Hosts with errors first, then by known exploited, critical and high
+fixable vulnerabilities. Modes and policy: configuration at the time this page was generated
 ({_e(now.strftime("%Y-%m-%d %H:%M UTC"))}). Configuration changes appear after the next
 report or patch run.</p>
 {missing_html}

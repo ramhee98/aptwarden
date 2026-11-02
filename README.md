@@ -593,11 +593,29 @@ for bad package updates.
 After every `report` and `patch` run, aptwarden writes a static, read-only HTML page:
 `/var/lib/aptwarden/www/index.html` by default. It contains:
 
-- totals and a table of all hosts (modes, fixable, critical, high, KEV, last scan, last
-  patch), and per host its policy, as configured when the page was generated
+- totals, then a **Needs attention** block right below them (see below)
+- a table of all hosts (modes, fixable, critical, high, KEV, last scan, last patch),
+  sorted by risk: hosts with errors first (failed scan, or a last patch run listed
+  below), then by the number of fixable known exploited, critical and high
+  vulnerabilities, then by name
+- per host its policy, as configured when the page was generated
 - per host: the fixable packages, every vulnerability (collapsible), the patch history
   and aptwarden's snapshots
 - the state of the data sources and definitions, including rejected releases
+
+**Needs attention** lists, worst first, everything that needs a human. Each entry links
+to the host's details:
+
+- hosts whose last patch run ended `needs-manual-rollback`, `rollback-failed` or `failed`
+  (`rolled-back` is not listed: the host is back on its snapshot. An `aptwarden
+  rollback` also ends as `rolled-back` and clears the entry)
+- hosts whose last scan failed
+- fixable known exploited (KEV) vulnerabilities, one entry each
+- hosts whose last patch runs were `aborted` at least twice in a row, with the reason.
+  An abort with the same reason as the previous run sends no further mail, so the page
+  keeps them visible.
+
+When none of this applies, the block says "Nothing needs attention".
 
 The page is always rendered from the stored state of every configured host, so a patch
 run of one host does not hide the others. It has no JavaScript and no forms. A

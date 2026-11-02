@@ -1,4 +1,5 @@
 import os
+import re
 import stat
 
 from aptwarden import statuspage
@@ -108,3 +109,62 @@ def test_write_errors_do_not_raise(make_config, tmp_path):
     state = State(cfg.state_dir / "state.db")
     assert statuspage.write(cfg, state) is None
     state.close()
+
+
+def save_scan(state: State, host: str, findings=(), ok=True):
+    state.save_host("r1", HostRecord("r1", host, "192.0.2.30", ok, None if ok else "boom", {},
+                                     [], "2026-10-23T06:00:00+00:00", list(findings)))
+
+
+def save_patch(state: State, run_id: str, host: str, status: str, started: str, reason=""):
+    state.save_patch(run_id, host, status, started,
+                     {"status": status, "started_at": started, "reason": reason, "items": []})
+
+
+def test_needs_attention_and_risk_order(make_config):
+    names = ["web01", "db01", "mail01", "app01", "once01", "crit01", "high01", "aaa01"]
+    cfg = make_config(hosts=[{"name": n} for n in names])
+    state = State(cfg.state_dir / "state.db")
+    seed(state)  # web01: KEV fixable, rolled back; db01: scan failed
+    save_scan(state, "mail01")
+    save_patch(state, "p2", "mail01", "needs-manual-rollback", "2026-10-23T02:10:00+00:00",
+               "healthchecks failed, rollback: manual")
+    save_scan(state, "app01")
+    for i, started in enumerate(["2026-10-21T02:00:00+00:00", "2026-10-22T02:00:00+00:00"]):
+        save_patch(state, f"a{i}", "app01", "aborted", started, "simulation: held packages")
+    save_scan(state, "once01")
+    save_patch(state, "o1", "once01", "patched", "2026-10-21T02:00:00+00:00")
+    save_patch(state, "o2", "once01", "aborted", "2026-10-22T02:00:00+00:00", "ssh: timed out")
+    save_scan(state, "crit01", [Finding("CVE-2026-9", "curl", "8.1-1", FindingStatus.FIXABLE,
+                                        fixed_version="8.1-2", severity=Severity.CRITICAL)])
+    save_scan(state, "high01", [Finding("CVE-2026-8", "curl", "8.1-1", FindingStatus.FIXABLE,
+                                        fixed_version="8.1-2", severity=Severity.HIGH)])
+    save_scan(state, "aaa01")
+    page = statuspage.render(cfg, state)
+    state.close()
+
+    attention = page.split("<h2>Needs attention</h2>")[1].split("<h2>Hosts</h2>")[0]
+    entries = re.findall(r'<li><a href="#([\w.-]+)">', attention)
+    assert entries == ["mail01", "db01", "web01", "app01"]
+    assert "needs-manual-rollback" in attention and "rollback: manual" in attention
+    assert "latest scan 2026-10-23T06:00:00+00:00 failed: ssh: timed out" in attention
+    assert "CVE-2026-24061" in attention and "2:2.6-3+deb13u3" in attention
+    assert "CVE-2026-2<" not in attention  # fixable, but not known exploited
+    assert "2 patch runs in a row · simulation: held packages" in attention
+    assert "rolled-back" not in attention  # fixed itself
+    assert "once01" not in attention  # a single abort is not yet a pattern
+
+    table = page.split("<h2>Hosts</h2>")[1].split("<h2>")[0]
+    assert re.findall(r'<tr><td><a href="#([\w.-]+)">', table) == [
+        "db01", "mail01", "web01", "crit01", "high01", "aaa01", "app01", "once01"]
+
+
+def test_nothing_needs_attention(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    save_scan(state, "web01")
+    save_patch(state, "p1", "web01", "rolled-back", "2026-10-23T02:00:00+00:00")
+    page = statuspage.render(cfg, state)
+    state.close()
+    assert '<h2>Needs attention</h2>\n<p class="good">Nothing needs attention</p>' in page
