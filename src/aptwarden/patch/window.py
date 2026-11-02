@@ -11,6 +11,7 @@ idempotent, so the second pass finds nothing to do.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta, tzinfo
@@ -125,6 +126,16 @@ def next_open(windows: list[str] | None, now: datetime | None = None,
                     best = start
                 break
     return (best, False) if best else None
+
+
+def server_zone() -> str:
+    """Name of the server's local time zone: $TZ or the /etc/localtime link
+    (e.g. Europe/Zurich), else its current abbreviation."""
+    name = os.environ.get("TZ", "").lstrip(":")
+    if not name:
+        target = os.path.realpath("/etc/localtime")
+        name = target.split("/zoneinfo/", 1)[1] if "/zoneinfo/" in target else ""
+    return name or datetime.now().astimezone().tzname() or "unknown"
 
 
 def describe(windows: list[str] | None, tz: str | None) -> str:

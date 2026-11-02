@@ -1,10 +1,29 @@
 import os
 import re
 import stat
+import time
+from datetime import UTC, datetime
+
+import pytest
 
 from aptwarden import statuspage
 from aptwarden.models import Finding, FindingStatus, Severity
+from aptwarden.patch import window
 from aptwarden.state import HostRecord, State
+
+
+@pytest.fixture(autouse=True)
+def server_tz(monkeypatch):
+    """The server's local time zone, UTC unless a test sets another one."""
+    def set_tz(name):
+        monkeypatch.setenv("TZ", name)
+        time.tzset()
+
+    set_tz("UTC")
+    yield set_tz
+    monkeypatch.undo()
+    time.tzset()
+
 
 EVIL = '<script>alert(1)</script><img src=x onerror=alert(2)> "quoted" & more'
 
@@ -147,7 +166,7 @@ def test_needs_attention_and_risk_order(make_config):
     entries = re.findall(r'<li><a href="#([\w.-]+)">', attention)
     assert entries == ["mail01", "db01", "web01", "app01"]
     assert "needs-manual-rollback" in attention and "rollback: manual" in attention
-    assert "latest scan 2026-10-23T06:00:00+00:00 failed: ssh: timed out" in attention
+    assert "latest scan 2026-10-23 06:00 UTC failed: ssh: timed out" in attention
     assert "CVE-2026-24061" in attention and "2:2.6-3+deb13u3" in attention
     assert "CVE-2026-2<" not in attention  # fixable, but not known exploited
     assert "2 patch runs in a row · simulation: held packages" in attention
@@ -168,3 +187,55 @@ def test_nothing_needs_attention(make_config):
     page = statuspage.render(cfg, state)
     state.close()
     assert '<h2>Needs attention</h2>\n<p class="good">Nothing needs attention</p>' in page
+
+
+def time_cfg(make_config, **policy):
+    return make_config(policy=policy, hosts=[
+        {"name": "web01", "policy": {"modes": ["patch"], "window": ["Mon..Fri 03:00-04:00"]},
+         "healthchecks": [{"systemd": "nginx.service"}]},
+        {"name": "db01", "policy": {"modes": ["patch"], "window": ["Sun 04:00-05:00"],
+                                    "timezone": "America/New_York"},
+         "healthchecks": [{"systemd": "postgresql.service"}]}])
+
+
+def render_times(cfg):
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    for host in ("web01", "db01"):  # scanned in summer time
+        state.save_host("r1", HostRecord("r1", host, "192.0.2.30", True, None, {}, [],
+                                         "2026-10-23T06:00:00+00:00", []))
+    state.finish_run("r1", "ok", {"sources": [{"name": "debian_tracker", "ok": True,
+                                                 "checked_at": 1793595600.0}]})  # 2026-11-02 05:00 UTC
+    state.save_patch("p1", "web01", "patched", "2026-11-02T06:00:00+00:00",  # winter time
+                     {"status": "patched", "started_at": "2026-11-02T06:00:00+00:00",
+                      "items": []})
+    page = statuspage.render(cfg, state, now=datetime(2026, 11, 2, 6, 30, tzinfo=UTC))
+    state.close()
+    return page
+
+
+def test_times_in_the_global_policy_timezone(make_config):
+    page = render_times(time_cfg(make_config, timezone="Europe/Zurich"))
+    assert "generated 2026-11-02 07:30 CET · times in Europe/Zurich" in page
+    assert "scanned 2026-10-23 08:00 CEST" in page  # summer time
+    assert "2026-11-02 07:00 CET" in page  # patch, winter time
+    assert "checked 2026-11-02 06:00 CET" in page
+    assert "UTC" not in page
+    # windows in each host's own zone
+    assert "window Mon..Fri 03:00-04:00 (Europe/Zurich)" in page
+    assert "window Sun 04:00-05:00 (America/New_York)" in page
+
+
+def test_times_in_server_local_time(make_config, server_tz):
+    server_tz("America/New_York")
+    page = render_times(time_cfg(make_config))
+    assert "generated 2026-11-02 01:30 EST · times in server local time, America/New_York" in page
+    assert "scanned 2026-10-23 02:00 EDT" in page
+    assert "2026-11-02 01:00 EST" in page
+    assert "window Mon..Fri 03:00-04:00 (server local time, America/New_York)" in page
+    assert "window Sun 04:00-05:00 (America/New_York)" in page
+
+
+def test_server_zone(monkeypatch):
+    monkeypatch.setenv("TZ", ":Europe/Zurich")
+    assert window.server_zone() == "Europe/Zurich"

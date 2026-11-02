@@ -88,8 +88,40 @@ def _vuln_link(vuln_id: str) -> str:
     return f'<a href="{_e(TRACKER_URL + vuln_id)}" rel="noreferrer">{_e(vuln_id)}</a>'
 
 
-def _ts(value: str | None) -> str:
-    return _e(value.replace("T", " ").replace("+00:00", " UTC")) if value else "never"
+def _local(when: datetime, tz: str | None) -> str:
+    """``when`` as wall-clock time in ``tz`` (server local time without one),
+    with the zone's abbreviation: 2026-11-02 07:00 CET."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return window.local_now(tz, when).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _when(value: str | None, tz: str | None) -> str:
+    """A stored ISO timestamp in ``tz``; unescaped."""
+    if not value:
+        return "never"
+    try:
+        return _local(datetime.fromisoformat(value), tz)
+    except ValueError:
+        return value
+
+
+def _ts(value: str | None, tz: str | None) -> str:
+    return _e(_when(value, tz))
+
+
+def _zone_label(tz: str | None) -> str:
+    return tz or f"server local time, {window.server_zone()}"
+
+
+def page_timezone(cfg: Config) -> str | None:
+    """The global policy.timezone; None (server local time) without a valid one."""
+    tz = cfg.raw["policy"].get("timezone")
+    try:
+        window.zone(tz)
+    except ValueError:
+        return None
+    return tz
 
 
 def _patch_badge(status: str | None) -> str:
@@ -136,7 +168,7 @@ def _policy_line(host: HostConfig | None) -> str:
                 if snap["provider"] == "proxmox" else "none")
     items = [
         f"modes {', '.join(p['modes']) or '-'}",
-        f"window {window.describe(p['window'], p.get('timezone'))}",
+        f"window {window.describe(p['window'], _zone_label(p.get('timezone')))}",
         f"auto-patch {', '.join(p['auto_patch_severities'])}"
         + (" + KEV" if p["auto_patch_kev"] else ""),
         f"rollback {p['rollback']}", f"restart {p['restart']}", f"reboot {p['reboot']}",
@@ -149,7 +181,7 @@ def _policy_line(host: HostConfig | None) -> str:
 
 def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict],
                   snapshots: list[dict], min_severity: Severity,
-                  host: HostConfig | None = None) -> str:
+                  host: HostConfig | None = None, tz: str | None = None) -> str:
     s = rec.summary
     fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
     others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
@@ -160,7 +192,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     if latest_error:
         parts.append(f'<p class="bad">{_e(latest_error)}</p>')
     parts += [f'<p class="warn">⚠ {_e(w)}</p>' for w in rec.warnings]
-    parts.append(f'<p class="muted">scanned {_ts(rec.scanned_at)} · '
+    parts.append(f'<p class="muted">scanned {_ts(rec.scanned_at, tz)} · '
                  f'{_e(s.get("package_count", 0))} packages</p>')
     parts.append(_policy_line(host))
 
@@ -199,7 +231,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
         for p in patches:
             pkgs = ", ".join(i["source_package"] for i in p.get("items", []))
             snap = (p.get("snapshot") or {}).get("name", "-")
-            parts.append(f"<tr><td>{_ts(p.get('started_at'))}</td>"
+            parts.append(f"<tr><td>{_ts(p.get('started_at'), tz)}</td>"
                          f"<td>{_patch_badge(p.get('status'))}</td><td>{_e(pkgs or '-')}</td>"
                          f"<td><code>{_e(snap)}</code></td>"
                          f"<td>{_e(truncate(p.get('reason', ''), 160))}</td></tr>")
@@ -207,7 +239,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     if snapshots:
         parts.append("<h3>Snapshots kept by aptwarden</h3><ul>" + "".join(
             f"<li><code>{_e(x['name'])}</code> on {_e(x['target'])}, "
-            f"{_ts(x['created_at'])} ({_e(x['state'])})</li>" for x in snapshots) + "</ul>")
+            f"{_ts(x['created_at'], tz)} ({_e(x['state'])})</li>" for x in snapshots) + "</ul>")
     parts.append("</details>")
     return "".join(parts)
 
@@ -226,14 +258,14 @@ def _aborted_streak(history: list[dict]) -> int:
 
 
 def _attention(records: list[tuple[HostRecord, str | None]],
-               history: dict[str, list[dict]]) -> str:
+               history: dict[str, list[dict]], tz: str | None) -> str:
     """Everything that needs a human, worst first, each linked to its host."""
     failed, scans, kev, aborts = [], [], [], []
     for rec, error in records:
         latest = (history[rec.host] or [{}])[0]
         if latest.get("status") in ATTENTION_PATCH:
             failed.append(f"<li>{_host_link(rec.host)}: last patch run "
-                          f"{_patch_badge(latest['status'])} {_ts(latest.get('started_at'))}"
+                          f"{_patch_badge(latest['status'])} {_ts(latest.get('started_at'), tz)}"
                           f" · {_e(truncate(latest.get('reason', ''), 160))}</li>")
         if error:
             scans.append(f'<li>{_host_link(rec.host)}: <span class="bad">{_e(error)}</span></li>')
@@ -257,6 +289,7 @@ def _attention(records: list[tuple[HostRecord, str | None]],
 
 def render(cfg: Config, state: State, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
+    tz = page_timezone(cfg)
     min_severity = Severity.parse(cfg.report["min_severity"])
     records: list[tuple[HostRecord, str | None]] = []
     missing: list[str] = []
@@ -267,7 +300,8 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
             missing.append(h.name)
             continue
         good = latest if latest.ok else state.latest(h.name, ok_only=True)
-        error = None if latest.ok else f"latest scan {latest.scanned_at} failed: {latest.error}"
+        error = None if latest.ok else (f"latest scan {_when(latest.scanned_at, tz)} failed: "
+                                         f"{latest.error}")
         if last_run is None or latest.run_id > last_run:
             last_run = latest.run_id
         records.append((good or latest, error))
@@ -293,9 +327,9 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
                     f'<td class="num critical">{sev[Severity.CRITICAL] or ""}</td>'
                     f'<td class="num high">{sev[Severity.HIGH] or ""}</td>'
                     f'<td class="num">{kev or ""}</td>'
-                    f"<td>{_ts(rec.scanned_at)}</td>"
+                    f"<td>{_ts(rec.scanned_at, tz)}</td>"
                     f"<td>{_patch_badge(patch.get('status'))} "
-                    f"<span class=\"muted\">{_ts(patch.get('started_at')) if patch else ''}"
+                    f"<span class=\"muted\">{_ts(patch.get('started_at'), tz) if patch else ''}"
                     "</span></td></tr>"))
     rows.sort()
 
@@ -306,7 +340,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
         items = []
         for src in sources:
             cls = "good" if src.get("ok") else "bad"
-            checked = (datetime.fromtimestamp(src["checked_at"], UTC).strftime("%Y-%m-%d %H:%M UTC")
+            checked = (_local(datetime.fromtimestamp(src["checked_at"], UTC), tz)
                        if src.get("checked_at") else "never")
             detail = f" · {_e(src['message'])}" if src.get("message") else ""
             warn = "".join(f'<br><span class="warn">⚠ {_e(w)}</span>'
@@ -327,7 +361,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
     hosts_html = "".join(
         _host_section(rec, error, history[rec.host],
                       state.snapshots(rec.host, ("active", "rolled-back")), min_severity,
-                      by_name.get(rec.host))
+                      by_name.get(rec.host), tz)
         for rec, error in records)
     missing_html = (f'<p class="muted">not scanned yet: {_e(", ".join(missing))}</p>'
                     if missing else "")
@@ -344,11 +378,12 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
 </head>
 <body><main>
 <h1>aptwarden status</h1>
-<p class="muted">generated {_e(now.strftime("%Y-%m-%d %H:%M UTC"))} · aptwarden {_e(__version__)}
+<p class="muted">generated {_e(_local(now, tz))} · times in {_e(_zone_label(tz))} ·
+aptwarden {_e(__version__)}
 {f"· latest run {_e(last_run)}" if last_run else ""}</p>
 <div class="tiles">{tiles}</div>
 <h2>Needs attention</h2>
-{_attention(records, history)}
+{_attention(records, history, tz)}
 <h2>Hosts</h2>
 <div class="wrap"><table>
 <tr><th>Host</th><th>Modes</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
@@ -357,7 +392,7 @@ def render(cfg: Config, state: State, now: datetime | None = None) -> str:
 </table></div>
 <p class="muted">Hosts with errors first, then by known exploited, critical and high
 fixable vulnerabilities. Modes and policy: configuration at the time this page was generated
-({_e(now.strftime("%Y-%m-%d %H:%M UTC"))}). Configuration changes appear after the next
+({_e(_local(now, tz))}). Configuration changes appear after the next
 report or patch run.</p>
 {missing_html}
 {sources_html}

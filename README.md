@@ -598,7 +598,8 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   sorted by risk: hosts with errors first (failed scan, or a last patch run listed
   below), then by the number of fixable known exploited, critical and high
   vulnerabilities, then by name
-- per host its policy, as configured when the page was generated
+- per host its policy, as configured when the page was generated, with its maintenance
+  windows in the host's own time zone
 - per host: the fixable packages, every vulnerability (collapsible), the patch history
   and aptwarden's snapshots
 - the state of the data sources and definitions, including rejected releases
@@ -639,6 +640,11 @@ status_page:
   path: null             # default: <state_dir>/www/index.html
   mode: "0640"           # e.g. "0644" if another local user serves it
 ```
+
+Times on the page (scans, patch runs, snapshots, data sources, when it was generated)
+are shown in the global `policy.timezone` with the zone's abbreviation, e.g.
+`2026-11-02 07:00 CET` in winter and `2026-10-23 08:00 CEST` in summer. Without it, they
+use the central host's local time zone; the page header names the zone used.
 
 `aptwarden status --format html` prints the page to stdout.
 
