@@ -99,6 +99,8 @@ policy:                            # defaults for every host, overridable per ho
   auto_patch_severities: [critical, high]
   auto_patch_kev: true
   window: []                       # e.g. ["Mon..Fri 02:00-04:00"]; empty = any time
+  timezone: null                   # IANA name for the windows, e.g. Europe/Zurich;
+                                   # default: the central host's local time (often UTC in LXC)
   restart: auto                    # needrestart: auto | list | off
   reboot: never                    # never | if-required
   rollback: auto                   # auto | manual

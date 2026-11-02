@@ -41,7 +41,7 @@ def test_render(make_config, tmp_path):
     cfg = make_config(hosts=[
         {"name": "web01", "snapshot": {"provider": "proxmox", "vmid": 139, "type": "lxc"},
          "policy": {"modes": ["report", "dry-run", "patch"], "window": ["Mon..Fri 03:00-04:00"],
-                    "rollback": "manual"},
+                    "timezone": "Europe/Zurich", "rollback": "manual"},
          "healthchecks": [{"systemd": "nginx.service"}]},
         {"name": "db01"}, {"name": "new01"}],
         proxmox={"url": "https://192.0.2.9:8006", "node": "pve", "token_id": "a@pve!t",
@@ -70,7 +70,8 @@ def test_render(make_config, tmp_path):
     # modes and policy, with where they come from
     assert '<td><span class="badge good">patch</span></td>' in page
     assert '<td><span class="muted">report only</span></td>' in page
-    assert ("policy: modes report, dry-run, patch · window Mon..Fri 03:00-04:00 · auto-patch "
+    assert ("policy: modes report, dry-run, patch · window Mon..Fri 03:00-04:00 (Europe/Zurich) · "
+            "auto-patch "
             "critical, high + KEV · rollback manual · restart auto · reboot never · snapshot "
             "proxmox lxc 139 · 1 healthchecks") in page
     assert "policy: modes report</p>" in page

@@ -650,6 +650,14 @@
           "items": {
             "type": "string"
           }
+        },
+        "timezone": {
+          "description": "IANA time zone of the maintenance windows, e.g. Europe/Zurich; default: the central host's local time",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$"
         }
       }
     },

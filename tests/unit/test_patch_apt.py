@@ -129,3 +129,90 @@ def test_window_in_config(make_config):
     from aptwarden.config import ConfigError
     with pytest.raises(ConfigError, match="maintenance window"):
         make_config(hosts=[{"name": "a", "policy": {"window": ["Mon 2-4"]}}])
+
+
+# --- time zones ------------------------------------------------------------------
+
+from datetime import UTC  # noqa: E402
+
+ZH = "Europe/Zurich"
+
+
+def utc(text):
+    return datetime.fromisoformat(text).replace(tzinfo=UTC)
+
+
+@pytest.mark.parametrize("instant, inside", [
+    ("2026-07-01 00:30", True),    # 02:30 CEST (UTC+2)
+    ("2026-07-01 02:30", False),   # 04:30 CEST; the same instant as UTC wall time would be inside
+    ("2026-01-15 01:30", True),    # 02:30 CET (UTC+1)
+    ("2026-01-15 00:30", False),   # 01:30 CET
+])
+def test_window_in_time_zone(instant, inside):
+    assert window.in_any(["daily 02:00-03:00"], utc(instant), ZH) is inside
+
+
+def test_window_without_time_zone_uses_wall_time_as_given():
+    assert window.in_any(["daily 02:00-03:00"], datetime(2026, 7, 1, 2, 30))
+    assert window.in_any(["daily 02:00-03:00"], utc("2026-07-01 02:30"), None) is \
+        window.parse("daily 02:00-03:00").contains(utc("2026-07-01 02:30").astimezone())
+
+
+def test_window_spring_forward_skips_the_missing_hour():
+    # 2026-03-29: clocks jump from 02:00 CET to 03:00 CEST, 02:00-03:00 does not exist
+    instants = [utc(f"2026-03-29 {h:02d}:{m:02d}") for h in (0, 1) for m in (0, 15, 30, 45)]
+    assert not any(window.in_any(["daily 02:00-03:00"], t, ZH) for t in instants)
+    # a window around the jump is open only for its real part
+    assert window.in_any(["daily 01:30-03:30"], utc("2026-03-29 00:45"), ZH)  # 01:45 CET
+    assert window.in_any(["daily 01:30-03:30"], utc("2026-03-29 01:15"), ZH)  # 03:15 CEST
+
+
+def test_window_fall_back_is_open_twice():
+    # 2026-10-25: 02:00-03:00 happens twice, first CEST (00:xx UTC), then CET (01:xx UTC)
+    assert window.in_any(["daily 02:00-03:00"], utc("2026-10-25 00:30"), ZH)
+    assert window.in_any(["daily 02:00-03:00"], utc("2026-10-25 01:30"), ZH)
+    assert not window.in_any(["daily 02:00-03:00"], utc("2026-10-25 02:30"), ZH)  # 03:30 CET
+
+
+def test_window_past_midnight_in_time_zone():
+    # Sun 23:00 - Mon 01:00 local; Monday 2026-11-02 00:30 CET = Sunday 23:30 UTC
+    assert window.in_any(["Sun 23:00-01:00"], utc("2026-11-01 23:30"), ZH)
+    assert not window.in_any(["Sun 23:00-01:00"], utc("2026-11-02 00:30"), ZH)  # 01:30 CET
+
+
+def test_next_open():
+    # Monday 2026-11-02 10:00 CET; next Mon..Fri 03:00 window is Tuesday 03:00 CET
+    start, now_open = window.next_open(["Mon..Fri 03:00-04:00"], utc("2026-11-02 09:00"), ZH)
+    assert not now_open and start.isoformat() == "2026-11-03T03:00:00+01:00"
+    start, now_open = window.next_open(["daily 02:00-03:00"], utc("2026-07-01 00:30"), ZH)
+    assert now_open
+    assert window.next_open([], utc("2026-07-01 00:30"), ZH) is None
+    # Friday evening: the next weekday window is Monday
+    start, _ = window.next_open(["Mon..Fri 03:00-04:00"], utc("2026-11-06 20:00"), ZH)
+    assert start.strftime("%a %H:%M %Z") == "Mon 03:00 CET"
+    # a start inside the skipped spring hour moves to the real instant
+    start, _ = window.next_open(["Sun 02:30-03:30"], utc("2026-03-28 12:00"), ZH)
+    assert start.isoformat() == "2026-03-29T03:30:00+02:00"
+
+
+def test_time_zone_in_config(make_config):
+    from aptwarden.config import ConfigError
+
+    cfg = make_config(policy={"timezone": ZH}, hosts=[{"name": "a"},
+                                                     {"name": "b", "policy": {"timezone": "UTC"}}])
+    assert [h.policy["timezone"] for h in cfg.hosts] == [ZH, "UTC"]
+    with pytest.raises(ConfigError, match="unknown time zone"):
+        make_config(hosts=[{"name": "a", "policy": {"timezone": "Europe/Zuerich"}}])
+
+
+def test_runner_uses_host_time_zone(make_config):
+    from aptwarden.runner import Runner
+
+    cfg = make_config(hosts=[{"name": "a", "policy": {"modes": ["patch"], "timezone": ZH,
+                                                       "window": ["daily 02:00-03:00"]}}])
+    r = Runner(cfg)
+    eligible, _ = r._eligible(cfg.hosts, False, False, utc("2026-07-01 00:30"))  # 02:30 CEST
+    assert [h.name for h in eligible] == ["a"]
+    _, skipped = r._eligible(cfg.hosts, False, False, utc("2026-07-01 02:30"))   # 04:30 CEST
+    assert skipped == [("a", "outside the maintenance window")]
+    r.close()

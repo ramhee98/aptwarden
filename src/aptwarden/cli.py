@@ -228,6 +228,18 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
         factory.cleanup()
     if not h.healthchecks:
         notes.append("no healthchecks (patching would abort)")
+    if "patch" in h.policy["modes"]:
+        from aptwarden.patch import window
+
+        tz = h.policy.get("timezone")
+        nxt = window.next_open(h.policy["window"], tz=tz)
+        label = tz or "server local time"
+        if nxt is None:
+            notes.append("window: any time")
+        elif nxt[1]:
+            notes.append(f"window open now ({label})")
+        else:
+            notes.append(f"next window {nxt[0].strftime('%a %Y-%m-%d %H:%M %Z')} ({label})")
     if h.snapshot["provider"] == "none":
         notes.append("no snapshots" + ("" if h.policy["allow_without_snapshot"]
                                        else " (patching would abort)"))

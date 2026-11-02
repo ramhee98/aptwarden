@@ -20,6 +20,7 @@ from pathlib import Path
 from aptwarden import __version__
 from aptwarden.config import Config, HostConfig
 from aptwarden.models import Finding, FindingStatus, Severity
+from aptwarden.patch import window
 from aptwarden.report import group_findings, truncate
 from aptwarden.state import HostRecord, State
 
@@ -129,7 +130,7 @@ def _policy_line(host: HostConfig | None) -> str:
                 if snap["provider"] == "proxmox" else "none")
     items = [
         f"modes {', '.join(p['modes']) or '-'}",
-        f"window {', '.join(p['window']) or 'any time'}",
+        f"window {window.describe(p['window'], p.get('timezone'))}",
         f"auto-patch {', '.join(p['auto_patch_severities'])}"
         + (" + KEV" if p["auto_patch_kev"] else ""),
         f"rollback {p['rollback']}", f"restart {p['restart']}", f"reboot {p['reboot']}",

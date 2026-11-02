@@ -436,7 +436,8 @@ hosts:
     snapshot: {provider: proxmox, vmid: 101, type: lxc}   # type: lxc | qemu
     policy:
       modes: [report, dry-run, patch]
-      window: ["Mon..Fri 02:00-04:00", "Sat 03:00-05:00"]  # local time of the central host
+      window: ["Mon..Fri 02:00-04:00", "Sat 03:00-05:00"]
+      timezone: Europe/Zurich                              # default: the central host's local time
     healthchecks:
       - systemd: nginx.service
       - http: https://proxy01.example.org/healthz
@@ -526,6 +527,18 @@ healthchecks:
 - **Shown in check names**, e.g. `http https://blog.example.org/healthz (via 192.0.2.11)`.
 
 ### Timer and maintenance windows
+
+Windows are wall-clock times in `policy.timezone`, an IANA name such as `Europe/Zurich`
+(globally or per host). Without it they use the central host's local time, which in an
+LXC is often UTC, so set it explicitly. Daylight saving time is handled:
+
+- **Skipped hour (spring):** a window covering the hour that does not exist is shorter
+  that night, or empty if it lies entirely inside that hour.
+- **Repeated hour (autumn):** a window covering the hour that happens twice is open
+  twice. The second pass finds nothing left to do.
+
+`hosts check` shows the next window of every patch host in its time zone, and the status
+page shows the windows with their time zone.
 
 The patch timer runs hourly. Each host is only patched inside its window:
 

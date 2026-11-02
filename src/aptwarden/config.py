@@ -39,6 +39,7 @@ DEFAULTS: dict = {
         "auto_patch_severities": ["critical", "high"],
         "auto_patch_kev": True,
         "window": [],
+        "timezone": None,
         "restart": "auto",
         "reboot": "never",
         "rollback": "auto",
@@ -293,6 +294,10 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
                 window.parse(w)
             except ValueError as e:
                 raise ConfigError(f"host {h['name']}: {e}") from None
+        try:
+            window.zone(policy["timezone"])
+        except ValueError as e:
+            raise ConfigError(f"host {h['name']}: {e}") from None
         snapshot = h.get("snapshot", {"provider": "none"})
         if snapshot["provider"] == "proxmox" and "proxmox" not in merged:
             raise ConfigError(f"host {h['name']}: snapshot provider proxmox needs a proxmox "

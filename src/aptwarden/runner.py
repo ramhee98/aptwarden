@@ -268,7 +268,8 @@ class Runner:
                 skipped.append((h.name, "dry-run not enabled for this host (policy.modes)"))
             elif not dry_run and "patch" not in modes:
                 skipped.append((h.name, "patching not enabled for this host (policy.modes)"))
-            elif not dry_run and not ignore_window and not window.in_any(h.policy["window"], now):
+            elif not dry_run and not ignore_window and not window.in_any(
+                    h.policy["window"], now, h.policy.get("timezone")):
                 skipped.append((h.name, "outside the maintenance window"))
             else:
                 eligible.append(h)
