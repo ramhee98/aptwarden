@@ -734,7 +734,7 @@ vulnerability texts or addresses.
 ```json
 {"generated_at": "2026-11-02T06:00:12Z", "last_run": "20261102T060001Z-3f9a",
  "hosts": 7, "hosts_failing": 0, "fixable": 12, "critical": 0, "high": 3, "kev": 0,
- "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.2.0",
+ "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.3.0",
  "hosts_detail": [{"name": "web01", "scan_ok": true, "scanned_at": "2026-11-02T06:00:05Z",
                    "last_patch": "patched", "last_patch_at": "2026-10-30T02:00:41Z",
                    "fixable": 2, "critical": 0, "high": 1, "kev": 0,
