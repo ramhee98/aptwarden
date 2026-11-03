@@ -166,13 +166,16 @@ Notes on updating:
   ```sh
   git clone --quiet https://github.com/ramhee98/aptwarden /root/aptwarden-src
   git -C /root/aptwarden-src -c gpg.format=ssh \
-      -c gpg.ssh.allowedSignersFile=/etc/aptwarden/release_signers verify-tag v0.3.0
+      -c gpg.ssh.allowedSignersFile=/etc/aptwarden/release_signers \
+      -c gpg.openpgp.program=false -c gpg.x509.program=false verify-tag v0.3.0
   git -C /root/aptwarden-src checkout --quiet v0.3.0
   /opt/aptwarden/bin/pip install --no-deps --no-build-isolation /root/aptwarden-src
   ```
 
   `release_signers` lists the release key in `allowed_signers` format, like the
-  definitions signers file.
+  definitions signers file. git verifies a tag in the format of its signature, whatever
+  `gpg.format` says, so the two `program=false` options make sure an OpenPGP or X.509
+  signed tag fails instead of being checked against root's own keyring.
 - **`aptwarden version`** shows the installed version; the status page and
   `status.json` show it too.
 - **State and cache upgrade themselves:** `state.db` and `cache.db` migrate on first

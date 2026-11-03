@@ -23,6 +23,14 @@ commits.
   It was not exploitable with OpenSSH 9.6 or later, which rejects such a host name,
   so this adds a layer of defence in depth.
 
+- **Definition tags must carry an SSH signature.** git verifies a tag in the format of
+  its signature and ignores `gpg.format=ssh` for that, so an OpenPGP-signed tag was
+  checked against the keyring of the user aptwarden runs as instead of
+  `allowed_signers`. Tags whose signature is not SSH are now rejected before
+  `verify-tag`, and git runs with `gpg.openpgp.program=false` and
+  `gpg.x509.program=false`. The README's command for verifying a release tag sets the
+  same options.
+
 ### Upgrade notes
 
 - **Reinstall the helper on every patch host:** `aptwarden helper show --install | ssh

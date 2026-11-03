@@ -240,7 +240,9 @@ vulnerability (false-positive overrides).
 - **Signed release tags, not branches.** Anyone may commit to `main`.
   aptwarden only activates the newest tag `vYYYY.MM.DD[.N]` that
   1. carries a valid SSH signature by a key in the local `allowed_signers` file
-     (never taken from the repository),
+     (never taken from the repository). git verifies in the format of the signature,
+     not of `gpg.format`, so tags with an OpenPGP or X.509 signature are refused
+     before `verify-tag`, and the programs for those formats are set to `false`,
   2. descends from the last accepted commit (no rollback, no rewritten history),
   3. validates completely (all or nothing).
 

@@ -87,6 +87,12 @@ def tag_sort_key(tag: str) -> tuple[int, ...]:
     return tuple(int(n) for n in re.findall(r"\d+", tag))
 
 
+_SSH_SIGNATURE = "-----BEGIN SSH SIGNATURE-----"
+# the signature formats git knows (gpg-interface.c)
+_SIGNATURE_HEADERS = (_SSH_SIGNATURE, "-----BEGIN PGP SIGNATURE-----",
+                      "-----BEGIN PGP MESSAGE-----", "-----BEGIN SIGNED MESSAGE-----")
+
+
 class GitSync:
     def __init__(self, settings: dict, repo_dir: Path, allowed_signers: Path | None):
         self.settings = settings
@@ -103,7 +109,11 @@ class GitSync:
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_TERMINAL_PROMPT": "0",
         }
-        cmd = ["git", "-C", str(self.repo_dir), "-c", "gpg.format=ssh"]
+        # gpg.format only applies to signing; git verifies with the format of the signature
+        # itself. Disable the OpenPGP and X.509 programs, so such a signature can never be
+        # checked against the user's keyring instead of allowed_signers.
+        cmd = ["git", "-C", str(self.repo_dir), "-c", "gpg.format=ssh",
+               "-c", "gpg.openpgp.program=false", "-c", "gpg.x509.program=false"]
         if self.allowed_signers:
             cmd += ["-c", f"gpg.ssh.allowedSignersFile={self.allowed_signers}"]
         return cmd + list(args), env
@@ -151,6 +161,14 @@ class GitSync:
         return sorted(tags, key=tag_sort_key, reverse=True)
 
     def verify_tag(self, tag: str) -> tuple[bool, str]:
+        # git uses the last line that starts a signature of any format, so that one must be
+        # an SSH signature (a message may contain more such lines).
+        obj = self._git("cat-file", "tag", tag, check=False).stdout
+        headers = [line for line in obj.splitlines() if line.startswith(_SIGNATURE_HEADERS)]
+        if headers and not headers[-1].startswith(_SSH_SIGNATURE):
+            return False, "not an SSH signature"
+        if not headers:
+            return False, "unsigned"
         p = self._git("verify-tag", tag, check=False)
         detail = " ".join(p.stderr.split())
         return p.returncode == 0, detail

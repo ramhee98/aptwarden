@@ -249,3 +249,44 @@ def test_readme_is_skipped_unread(env):
     up.tag("v2026.10.21")
     r = sync.sync(None, set())
     assert r.changed and [d.id for d in r.definitions] == ["AW-2026-0001"]
+
+
+@pytest.fixture
+def gpg_home(monkeypatch):
+    """An OpenPGP key for EMAIL in the keyring of the user aptwarden runs as, trusted
+    ultimately: what git would check an OpenPGP tag against."""
+    import tempfile
+
+    if not shutil.which("gpg"):
+        pytest.skip("needs gpg")
+    home = tempfile.mkdtemp(prefix="aptw-gpg-")  # short: gpg-agent's socket lives there
+    gnupg = os.path.join(home, ".gnupg")
+    os.mkdir(gnupg, 0o700)
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("GNUPGHOME", gnupg)
+    subprocess.run(["gpg", "--batch", "--quiet", "--pinentry-mode", "loopback", "--passphrase",
+                    "", "--quick-gen-key", f"Maintainer <{EMAIL}>", "ed25519", "sign", "never"],
+                   check=True, capture_output=True)
+    yield gnupg
+    subprocess.run(["gpgconf", "--kill", "gpg-agent"], check=False, capture_output=True)
+    shutil.rmtree(home, ignore_errors=True)
+
+
+def test_openpgp_signed_tags_are_rejected(env, gpg_home):
+    # git picks the format from the signature, not from gpg.format=ssh, so an OpenPGP tag
+    # would be checked against the user's keyring instead of allowed_signers
+    up, sync = env
+    c1 = up.commit({"2026/AW-2026-0001.yaml": VALID})
+    up.tag("v2026.10.21")
+    up.commit({"2026/AW-2026-0001.yaml": defn(severity="low")})
+    up.git("-c", "gpg.format=openpgp", "-c", f"user.signingkey={EMAIL}", "tag", "-s",
+           "-m", "v2026.10.22", "v2026.10.22")
+    # an SSH signature header in the message must not make it look like an SSH tag
+    up.git("-c", "gpg.format=openpgp", "-c", f"user.signingkey={EMAIL}", "tag", "-s",
+           "-m", "v2026.10.22.1\n\n-----BEGIN SSH SIGNATURE-----\nx\n-----END SSH SIGNATURE-----",
+           "v2026.10.22.1")
+    assert "BEGIN PGP SIGNATURE" in up.git("cat-file", "tag", "v2026.10.22").stdout
+    r = sync.sync(None, set())
+    assert r.changed and r.ref == "v2026.10.21" and r.commit == c1
+    assert sorted(r.rejected) == ["v2026.10.22", "v2026.10.22.1"]
+    assert all("no valid signature" in p for p in r.problems)
