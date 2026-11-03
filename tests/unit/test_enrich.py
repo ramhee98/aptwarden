@@ -14,7 +14,7 @@ NVD = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 KEV_URL = "https://example.org/kev.json"
 
 
-def finding(vid="CVE-2026-1", status=FindingStatus.FIXABLE, urgency=None, aliases=()):
+def finding(vid="CVE-2026-0001", status=FindingStatus.FIXABLE, urgency=None, aliases=()):
     return Finding(vid, "openssl", "3.5.1-1", status, urgency=urgency, aliases=list(aliases))
 
 
@@ -68,41 +68,53 @@ V4 = {"severity": [{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI
 
 def test_lookup_flow_osv_then_nvd_then_cache(cache):
     http = FakeHttp({
-        ("GET", f"{OSV}/v1/vulns/CVE-1"): json_response(v3()),
-        ("GET", f"{OSV}/v1/vulns/CVE-2"): json_response(V4),
-        ("GET", f"{OSV}/v1/vulns/CVE-3"): Response(404),
-        ("GET", f"{OSV}/v1/vulns/CVE-4"): json_response({"severity": []}),
-        ("GET", f"{NVD}?cveId=CVE-2"): json_response(fixture_json("nvd-CVE-2025-11187.json")),
-        ("GET", f"{NVD}?cveId=CVE-3"): Response(404),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1001"): json_response(v3()),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1002"): json_response(V4),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1003"): Response(404),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1004"): json_response({"severity": []}),
+        ("GET", f"{NVD}?cveId=CVE-2026-1002"): json_response(fixture_json("nvd-CVE-2025-11187.json")),
+        ("GET", f"{NVD}?cveId=CVE-2026-1003"): Response(404),
     })
     lk, _ = lookup(cache, http)
-    res = lk.lookup(["CVE-1", "CVE-2", "CVE-3", "CVE-4", "TEMP-123"])
-    assert res["CVE-1"].score == 9.8 and res["CVE-1"].origin == "osv"
-    assert res["CVE-2"].score == 6.1 and res["CVE-2"].origin == "nvd"
-    assert "CVE-3" not in res and "CVE-4" not in res  # no score anywhere
-    assert f"{NVD}?cveId=CVE-4" not in http.urls()  # OSV mirrors NVD: no point asking
+    res = lk.lookup(["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003", "CVE-2026-1004", "TEMP-123"])
+    assert res["CVE-2026-1001"].score == 9.8 and res["CVE-2026-1001"].origin == "osv"
+    assert res["CVE-2026-1002"].score == 6.1 and res["CVE-2026-1002"].origin == "nvd"
+    assert "CVE-2026-1003" not in res and "CVE-2026-1004" not in res  # no score anywhere
+    assert f"{NVD}?cveId=CVE-2026-1004" not in http.urls()  # OSV mirrors NVD: no point asking
     assert lk.pending == 0
 
     calls = len(http.calls)
-    assert lk.lookup(["CVE-1", "CVE-2", "CVE-3", "CVE-4"]).keys() == {"CVE-1", "CVE-2"}
+    assert lk.lookup(["CVE-2026-1001", "CVE-2026-1002", "CVE-2026-1003", "CVE-2026-1004"]).keys() == {"CVE-2026-1001", "CVE-2026-1002"}
     assert len(http.calls) == calls  # everything cached
+
+
+@pytest.mark.parametrize("vid", ["CVE-2026-1", "cve-2026-1234", "CVE-2026-1234/../../x",
+                                 "CVE-2026-1234?cveId=x", "CVE-2026-1234\n", "CVE-２０２６-1234",
+                                 "CVE-2026-1234 ", "TEMP-0000000-ABCDEF"])
+def test_malformed_cve_ids_are_never_requested(cache, vid):
+    from aptwarden.enrich import cve_ids
+
+    http = FakeHttp()  # any request fails the test
+    lk, _ = lookup(cache, http)
+    assert lk.lookup([vid]) == {} and http.calls == []
+    assert cve_ids(finding(vid, aliases=["CVE-2026-1234"])) == ["CVE-2026-1234"]
 
 
 def test_nvd_budget_and_rate_limit(cache):
     routes = {}
     for i in range(20):
-        routes[("GET", f"{OSV}/v1/vulns/CVE-{i}")] = json_response(V4)
-        routes[("GET", f"{NVD}?cveId=CVE-{i}")] = json_response(
+        routes[("GET", f"{OSV}/v1/vulns/CVE-2026-{i:04d}")] = json_response(V4)
+        routes[("GET", f"{NVD}?cveId=CVE-2026-{i:04d}")] = json_response(
             {"vulnerabilities": [{"cve": {"metrics": {"cvssMetricV40": [
                 {"type": "Primary", "cvssData": {"baseScore": 8.0, "version": "4.0"}}]}}}]})
     http = FakeHttp(routes)
     lk, clock = lookup(cache, http, budget="30s")
-    ids = [f"CVE-{i}" for i in range(20)]
+    ids = [f"CVE-2026-{i:04d}" for i in range(20)]
     res = lk.lookup(ids)
     nvd_calls = [u for u in http.urls() if u.startswith(NVD)]
     # 6.5 s spacing without API key: requests at 0, 6.5, ..., 26 -> 5 within 30 s
     assert len(nvd_calls) == 5
-    assert nvd_calls[0].endswith("CVE-0")  # priority order is kept
+    assert nvd_calls[0].endswith("CVE-2026-0000")  # priority order is kept
     assert len(res) == 5
     assert lk.pending == 15
 
@@ -116,53 +128,53 @@ def test_nvd_budget_and_rate_limit(cache):
 
 def test_nvd_rate_limited_response_stops(cache):
     http = FakeHttp({
-        ("GET", f"{OSV}/v1/vulns/CVE-1"): Response(404),
-        ("GET", f"{OSV}/v1/vulns/CVE-2"): Response(404),
-        ("GET", f"{NVD}?cveId=CVE-1"): Response(403),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1001"): Response(404),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1002"): Response(404),
+        ("GET", f"{NVD}?cveId=CVE-2026-1001"): Response(403),
     })
     lk, _ = lookup(cache, http)
-    assert lk.lookup(["CVE-1", "CVE-2"]) == {}
+    assert lk.lookup(["CVE-2026-1001", "CVE-2026-1002"]) == {}
     assert lk.pending == 2
-    assert f"{NVD}?cveId=CVE-2" not in http.urls()
+    assert f"{NVD}?cveId=CVE-2026-1002" not in http.urls()
 
 
 def test_nvd_api_key_header(cache, tmp_path):
     keyfile = tmp_path / "nvd.key"
     keyfile.write_text("secret-key\n")
     http = FakeHttp({
-        ("GET", f"{OSV}/v1/vulns/CVE-1"): Response(404),
-        ("GET", f"{NVD}?cveId=CVE-1"): json_response(fixture_json("nvd-CVE-2025-11187.json")),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-1001"): Response(404),
+        ("GET", f"{NVD}?cveId=CVE-2026-1001"): json_response(fixture_json("nvd-CVE-2025-11187.json")),
     })
     lk, _ = lookup(cache, http, api_key_file=str(keyfile))
-    lk.lookup(["CVE-1"])
+    lk.lookup(["CVE-2026-1001"])
     assert http.calls[-1][2]["apiKey"] == "secret-key"
 
 
 def test_nvd_disabled_does_not_count_pending(cache):
-    http = FakeHttp({("GET", f"{OSV}/v1/vulns/CVE-1"): json_response(V4)})
+    http = FakeHttp({("GET", f"{OSV}/v1/vulns/CVE-2026-1001"): json_response(V4)})
     lk, _ = lookup(cache, http, enabled=False)
-    assert lk.lookup(["CVE-1"]) == {}
+    assert lk.lookup(["CVE-2026-1001"]) == {}
     assert lk.pending == 0
 
 
 def test_negative_cache_expires(cache):
-    http = FakeHttp({("GET", f"{OSV}/v1/vulns/CVE-1"): json_response({"severity": []})})
+    http = FakeHttp({("GET", f"{OSV}/v1/vulns/CVE-2026-1001"): json_response({"severity": []})})
     lk, _ = lookup(cache, http)
-    lk.lookup(["CVE-1"])
+    lk.lookup(["CVE-2026-1001"])
     cache.db.execute("UPDATE cvss SET fetched_at = ?", (time.time() - 8 * 86400,))
-    http.routes[("GET", f"{OSV}/v1/vulns/CVE-1")] = json_response(v3())
-    assert lk.lookup(["CVE-1"])["CVE-1"].score == 9.8
+    http.routes[("GET", f"{OSV}/v1/vulns/CVE-2026-1001")] = json_response(v3())
+    assert lk.lookup(["CVE-2026-1001"])["CVE-2026-1001"].score == 9.8
 
 
 def test_offline_uses_stale_cache_only(cache):
-    http = FakeHttp({("GET", f"{OSV}/v1/vulns/CVE-1"): json_response(v3())})
+    http = FakeHttp({("GET", f"{OSV}/v1/vulns/CVE-2026-1001"): json_response(v3())})
     lk, _ = lookup(cache, http)
-    lk.lookup(["CVE-1"])
+    lk.lookup(["CVE-2026-1001"])
     cache.db.execute("UPDATE cvss SET fetched_at = 0")
     lk.offline = True
     calls = len(http.calls)
-    res = lk.lookup(["CVE-1", "CVE-2"])
-    assert res["CVE-1"].score == 9.8
+    res = lk.lookup(["CVE-2026-1001", "CVE-2026-1002"])
+    assert res["CVE-2026-1001"].score == 9.8
     assert len(http.calls) == calls
     assert lk.pending == 1
 
@@ -178,7 +190,7 @@ def test_kev_refresh_and_contains(cache):
                                                      headers={"etag": '"abc"'})})
     kev = Kev({"url": KEV_URL, "refresh_interval": "24h"}, cache, http)
     assert kev.refresh().ok
-    assert kev.contains("CVE-2026-24061") and not kev.contains("CVE-1")
+    assert kev.contains("CVE-2026-24061") and not kev.contains("CVE-2026-1001")
     cache.set_time("kev.checked_at", time.time() - 2 * 86400)
     http.routes[("GET", KEV_URL)] = Response(304)
     assert kev.refresh().ok
@@ -194,21 +206,21 @@ def test_kev_rejects_empty_catalog(cache):
 
 def test_enrich_sets_severity_and_kev(cache):
     http = FakeHttp({
-        ("GET", f"{OSV}/v1/vulns/CVE-2026-1"): json_response(v3()),
-        ("GET", f"{OSV}/v1/vulns/CVE-2026-2"): json_response({"severity": []}),
-        ("GET", KEV_URL): json_response(kev_doc("CVE-2026-2")),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-0001"): json_response(v3()),
+        ("GET", f"{OSV}/v1/vulns/CVE-2026-0002"): json_response({"severity": []}),
+        ("GET", KEV_URL): json_response(kev_doc("CVE-2026-0002")),
     })
     lk, _ = lookup(cache, http)
     kev = Kev({"url": KEV_URL, "refresh_interval": "24h"}, cache, http)
     kev.refresh()
     findings = {"web01": [
-        finding("CVE-2026-1"),
-        finding("TEMP-9", aliases=["CVE-2026-2"], urgency="medium"),
-        finding("CVE-2026-3", status=FindingStatus.NO_FIX, urgency="unimportant"),
+        finding("CVE-2026-0001"),
+        finding("TEMP-9", aliases=["CVE-2026-0002"], urgency="medium"),
+        finding("CVE-2026-0003", status=FindingStatus.NO_FIX, urgency="unimportant"),
     ]}
     enrich(findings, lk, kev)
     a, b, c = findings["web01"]
     assert (a.severity, a.cvss_score, a.kev) == (Severity.CRITICAL, 9.8, False)
     assert (b.severity, b.kev) == (Severity.MEDIUM, True)
     assert c.severity == Severity.LOW
-    assert f"{OSV}/v1/vulns/CVE-2026-3" not in http.urls()  # unimportant: no lookup
+    assert f"{OSV}/v1/vulns/CVE-2026-0003" not in http.urls()  # unimportant: no lookup

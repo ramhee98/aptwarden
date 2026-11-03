@@ -13,6 +13,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from urllib.parse import quote
 
 from aptwarden import debversion
 from aptwarden.http import HttpError
@@ -210,11 +211,13 @@ class OsvSource(Source):
                 missing.append(vid)
 
         def fetch(vid: str):
-            resp = self.http.get(f"{self.url}/v1/vulns/{vid}")
+            # the ids come from OSV's own answer; quoted so they cannot change the path
+            url = f"{self.url}/v1/vulns/{quote(vid, safe='')}"
+            resp = self.http.get(url)
             if resp.status == 404:
                 return vid, None
             if resp.status != 200:
-                raise HttpError(f"{self.url}/v1/vulns/{vid}", f"HTTP {resp.status}", resp.status)
+                raise HttpError(url, f"HTTP {resp.status}", resp.status)
             return vid, resp.json()
 
         if missing:

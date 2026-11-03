@@ -89,6 +89,19 @@ def test_match_batches_hydrates_and_caches(cache):
     assert len(http.urls("GET")) == gets
 
 
+def test_record_ids_are_quoted_in_urls(cache):
+    # ids come from OSV's answer; they must not be able to change the request path
+    ids = [{"id": "DSA-1/../../v1/x?y", "modified": "2026-01-01T00:00:00Z"}]
+    http = FakeHttp({
+        ("POST", f"{URL}/v1/querybatch"): batch_route({"3.5.1-1": {"vulns": ids}}),
+        ("GET", f"{URL}/v1/vulns/DSA-1%2F..%2F..%2Fv1%2Fx%3Fy"): Response(404),
+    })
+    src = OsvSource(SETTINGS, cache, http)
+    src.refresh()
+    src.match([inventory()])
+    assert http.urls("GET") == [f"{URL}/v1/vulns/DSA-1%2F..%2F..%2Fv1%2Fx%3Fy"]
+
+
 def test_match_refetches_modified_records(cache):
     rec = record("DEBIAN-CVE-2026-1", [{"introduced": "0"}, {"fixed": "3.5.4-1"}])
     state = {"modified": "2026-01-01T00:00:00Z"}

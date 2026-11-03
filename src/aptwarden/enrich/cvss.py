@@ -11,16 +11,26 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from aptwarden.cache import Cache
 from aptwarden.config import parse_duration, read_secret
 from aptwarden.http import HttpClient, HttpError
 
 log = logging.getLogger(__name__)
+
+_CVE_ID = re.compile(r"CVE-[0-9]{4}-[0-9]{4,}")
+
+
+def is_cve(vuln_id: str) -> bool:
+    """A well-formed CVE id: only these are looked up, and they go into URLs."""
+    return _CVE_ID.fullmatch(vuln_id) is not None
+
 
 _W = {
     "AV": {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2},
@@ -135,7 +145,7 @@ class CvssLookup:
     def lookup(self, cve_ids: list[str]) -> dict[str, CvssResult]:
         """Scores for ``cve_ids``, in priority order (NVD's budget is spent on
         the first ones). CVEs without a known score are absent."""
-        wanted = [c for c in dict.fromkeys(cve_ids) if c.startswith("CVE-")]
+        wanted = [c for c in dict.fromkeys(cve_ids) if is_cve(c)]
         cached = self._cached(wanted)
         results = {c: r for c, (state, r) in cached.items() if state == "scored"}
         if self.offline:
@@ -195,7 +205,7 @@ class CvssLookup:
 
         def fetch(cve: str):
             try:
-                resp = self.http.get(f"{url}/v1/vulns/{cve}", retries=1)
+                resp = self.http.get(f"{url}/v1/vulns/{quote(cve, safe='')}", retries=1)
             except HttpError:
                 return cve, None, None
             return cve, resp.status, resp.json() if resp.status == 200 else None
@@ -234,7 +244,8 @@ class CvssLookup:
                 self.sleep(wait)
             last = self.clock()
             try:
-                resp = self.http.get(f"{url}?cveId={cve}", headers=headers, retries=0)
+                resp = self.http.get(f"{url}?{urlencode({'cveId': cve})}", headers=headers,
+                                     retries=0)
             except HttpError as e:
                 log.warning("nvd request failed", extra={"cve": cve, "error": str(e)})
                 break

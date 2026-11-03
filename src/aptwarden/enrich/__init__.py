@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aptwarden.enrich.cvss import CvssLookup, CvssResult
+from aptwarden.enrich.cvss import CvssLookup, CvssResult, is_cve
 from aptwarden.enrich.kev import Kev
 from aptwarden.models import Finding, FindingStatus, Severity
 
@@ -44,7 +44,7 @@ def assess(finding: Finding, cvss: CvssResult | None) -> None:
 
 def cve_ids(finding: Finding) -> list[str]:
     ids = [finding.vuln_id] + finding.aliases
-    return [i for i in dict.fromkeys(ids) if i.startswith("CVE-")]
+    return [i for i in dict.fromkeys(ids) if is_cve(i)]
 
 
 def enrich(findings_by_host: dict[str, list[Finding]], cvss: CvssLookup | None,

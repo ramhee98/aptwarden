@@ -37,6 +37,8 @@ commits.
   dpkg accepts, otherwise the host's inventory fails. Control characters in CLI output,
   text logs and error messages with remote output are escaped, so a host cannot
   rewrite the terminal or fake log lines.
+- Only well-formed CVE ids (`CVE-YYYY-NNNN…`) are looked up at OSV and NVD, and every
+  id that goes into a request URL is URL-encoded.
 
 ### Upgrade notes
 
