@@ -32,6 +32,11 @@ def test_defaults_and_host_inheritance(make_config, tmp_path):
         ({"hosts": [{"name": "a", "depends_on": ["b"]}, {"name": "b", "depends_on": ["c"]},
                     {"name": "c", "depends_on": ["a"]}]}, "cycle: a -> b -> c -> a"),
         ({"hosts": [{"name": "a", "depends_on": "b"}]}, "not of type 'array'"),
+        # the address must not become an ssh option
+        ({"hosts": [{"name": "a", "address": "-oProxyCommand=sh -c id"}]}, "does not match"),
+        ({"hosts": [{"name": "a", "address": "-oProxyCommand=id"}]}, "does not match"),
+        ({"hosts": [{"name": "a", "address": "web 01"}]}, "does not match"),
+        ({"hosts": [{"name": "a", "address": ""}]}, "does not match"),
     ],
 )
 def test_invalid_configs(make_config, overrides, message):

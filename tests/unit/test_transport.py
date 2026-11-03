@@ -172,6 +172,17 @@ def test_allowed_options_keep_canonical_names(make_config):
         make_config(ssh={"options": {"ProxyJump": "a", "proxyjump": "b"}})
 
 
+@pytest.mark.parametrize("address", ["-oProxyCommand=id", "-p", "web 01", "", "a\nb"])
+def test_address_cannot_become_an_option(monkeypatch, address):
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append(a))
+    t = SshTransport("web01", address, settings(), "/run/aptw")
+    with pytest.raises(TransportError, match="invalid ssh address"):
+        t.run(["true"])
+    t.close()
+    assert calls == []
+
+
 def test_managed_options_cannot_be_overridden_at_runtime():
     # settings built without the config loader are checked again
     for option in ("StrictHostKeyChecking", "UserKnownHostsFile", "ProxyCommand"):

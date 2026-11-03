@@ -17,6 +17,12 @@ commits.
   `allow_new_packages`, the central host now passes the allowed extras explicitly.
   A refusal ends the patch run as `aborted` (nothing changed, no rollback).
 
+- **Host addresses can no longer start with `-` or contain whitespace.** The config
+  schema refuses them, and the SSH transport refuses them again before running `ssh`.
+  An address like `-oProxyCommand=…` used to reach ssh's argument list as an option.
+  It was not exploitable with OpenSSH 9.6 or later, which rejects such a host name,
+  so this adds a layer of defence in depth.
+
 ### Upgrade notes
 
 - **Reinstall the helper on every patch host:** `aptwarden helper show --install | ssh

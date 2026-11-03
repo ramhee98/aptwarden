@@ -105,6 +105,11 @@ class SshTransport(Transport):
             opts.update(check_ssh_options(s.options))
         except ValueError as e:
             raise TransportError(str(e)) from None
+        # The address is the last argument before "--", so ssh would parse "-o..." as an
+        # option. The schema refuses it too; this covers addresses from elsewhere.
+        if not self.address or self.address.startswith("-") or any(
+                c.isspace() for c in self.address):
+            raise TransportError(f"invalid ssh address {self.address!r}")
         argv = ["ssh"]
         for k, v in opts.items():
             argv += ["-o", f"{k}={v}"]
@@ -134,8 +139,12 @@ class SshTransport(Transport):
         return CommandResult(argv, p.returncode, p.stdout, p.stderr)
 
     def close(self) -> None:
+        try:
+            argv = self.base_argv("-O", "exit")
+        except TransportError:
+            return  # never connected
         subprocess.run(
-            self.base_argv("-O", "exit"),
+            argv,
             capture_output=True,
             timeout=10,
             check=False,
