@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 
@@ -20,6 +21,32 @@ run_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("run_id"
 _STANDARD_ATTRS = frozenset(
     vars(logging.LogRecord("x", logging.INFO, "x", 0, "x", None, None)).keys()
 ) | {"message", "asctime", "run_id"}
+
+
+# C0 and C1 control characters and DEL, except tab. Text from target hosts (package data,
+# remote stderr) could otherwise move the cursor, rewrite lines or fake log lines.
+_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f]")
+_CONTROL_NL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_ESCAPES = {"\n": "\\n", "\r": "\\r"}
+
+
+def safe(text: object, keep_newlines: bool = False) -> str:
+    """``text`` with control characters escaped (``\\x1b``, ``\\n``) for terminals and logs."""
+    pattern = _CONTROL_NL if keep_newlines else _CONTROL
+    return pattern.sub(lambda m: _ESCAPES.get(m.group(), f"\\x{ord(m.group()):02x}"), str(text))
+
+
+class SafeStream:
+    """A text stream that writes everything through safe(), keeping newlines."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, text: str) -> int:
+        return self.stream.write(safe(text, keep_newlines=True))
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
 
 
 def _fields(record: logging.LogRecord) -> dict:
@@ -51,12 +78,12 @@ class JsonFormatter(logging.Formatter):
 class TextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-        extra = " ".join(f"{k}={v}" for k, v in _fields(record).items())
-        line = f"{ts} {record.levelname:<7} {record.getMessage()}"
+        extra = " ".join(f"{k}={safe(v)}" for k, v in _fields(record).items())
+        line = f"{ts} {record.levelname:<7} {safe(record.getMessage())}"
         if extra:
             line += f"  {extra}"
         if record.exc_info:
-            line += "\n" + self.formatException(record.exc_info)
+            line += "\n" + safe(self.formatException(record.exc_info), keep_newlines=True)
         return line
 
 

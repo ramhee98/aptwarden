@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 from datetime import UTC, datetime
 
@@ -19,6 +20,14 @@ DPKG_FORMAT = (
 # Second character of db:Status-Abbrev. Everything except "not installed" (n)
 # and "config files only" (c) means code from the package is on disk.
 _INSTALLED_STATES = frozenset("iUFWtH")
+
+# What dpkg itself accepts. Anything else (e.g. control characters) comes from a host that
+# lies about its packages and would end up in terminals, logs and mails.
+_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?")
+_SOURCE = re.compile(r"([a-z0-9][a-z0-9+.-]*)?")
+_VERSION = re.compile(r"[A-Za-z0-9.+~:-]+")
+_ARCH = re.compile(r"[a-z0-9-]+")
+_STATUS = re.compile(r"[a-zA-Z ]{2,3}")
 
 # Read-only facts, printed as key=value lines. A constant script, no input is
 # interpolated.
@@ -45,6 +54,12 @@ def parse_dpkg_query(text: str) -> list[Package]:
         if len(parts) != 6:
             raise InventoryError(f"unexpected dpkg-query output on line {lineno}: {line!r}")
         name, version, source, source_version, status, arch = parts
+        if not (_NAME.fullmatch(name) and _VERSION.fullmatch(version)
+                and _SOURCE.fullmatch(source) and _STATUS.fullmatch(status)
+                and (not source_version or _VERSION.fullmatch(source_version))
+                and _ARCH.fullmatch(arch)):
+            raise InventoryError(f"invalid package data from dpkg-query on line {lineno}: "
+                                 f"{line!r}")
         if len(status) < 2 or status[1] not in _INSTALLED_STATES:
             continue
         packages.append(

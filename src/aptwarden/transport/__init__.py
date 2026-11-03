@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from aptwarden.config import HostConfig, SshSettings, check_ssh_options
+from aptwarden.log import safe
 
 # Commands run with a fixed locale so their output is parseable.
 _ENV_PREFIX = ["env", "LC_ALL=C.UTF-8"]
@@ -17,6 +18,10 @@ _ENV_PREFIX = ["env", "LC_ALL=C.UTF-8"]
 
 class TransportError(Exception):
     """The host could not be reached or the command could not be started."""
+
+    def __init__(self, message: str):
+        # often contains the host's stderr; it ends up in logs, reports and mails
+        super().__init__(safe(message, keep_newlines=True))
 
 
 @dataclass

@@ -27,6 +27,21 @@ def test_parse_real_dpkg_output():
     assert "bind9-libs:amd64" in by_name
 
 
+@pytest.mark.parametrize("line", [
+    "evil\x1b[2J\t1\tevil\t1\tii \tamd64",       # control characters in the name
+    "openssl\t3.5\x1b]0;x\x07\topenssl\t3.5\tii \tamd64",  # ... in the version
+    "openssl\t3.5\topen ssl\t3.5\tii \tamd64",      # in the source
+    "openssl\t3.5\topenssl\t3.5\n1\tii \tamd64",   # a line break in a field
+    "openssl\t3.5\topenssl\t3.5\tii \tamd\x9b64",   # C1 in the architecture
+    "-oops\t1\t\t\tii \tamd64",
+    "openssl\t\topenssl\t3.5\tii \tamd64",          # empty version
+])
+def test_parse_dpkg_rejects_invalid_package_data(line):
+    with pytest.raises(InventoryError, match="invalid package data|unexpected dpkg-query") as e:
+        parse_dpkg_query(line + "\n")
+    assert "\x1b" not in str(e.value) and "\x9b" not in str(e.value)
+
+
 def test_parse_dpkg_status_filter():
     text = (
         "a\t1\ta\t1\tii \tamd64\n"

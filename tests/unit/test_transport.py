@@ -62,6 +62,15 @@ def test_ssh_connection_failure_raises(monkeypatch):
         t.run(["true"])
 
 
+def test_transport_errors_escape_remote_output():
+    from aptwarden.transport import CommandResult
+
+    r = CommandResult(["apt-get", "update"], 100, "", "E: broken\n\x1b[2Jfake\r")
+    with pytest.raises(TransportError) as e:
+        r.check()
+    assert str(e.value).endswith("E: broken\n\\x1b[2Jfake")  # stripped, then escaped
+
+
 def test_local_transport():
     t = LocalTransport("self")
     r = t.run(["sh", "-c", "echo $LC_ALL; exit 3"])

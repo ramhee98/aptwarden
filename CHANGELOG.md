@@ -31,6 +31,13 @@ commits.
   `gpg.x509.program=false`. The README's command for verifying a release tag sets the
   same options.
 
+### Hardening
+
+- Package names, versions and architectures reported by a target host must match what
+  dpkg accepts, otherwise the host's inventory fails. Control characters in CLI output,
+  text logs and error messages with remote output are escaped, so a host cannot
+  rewrite the terminal or fake log lines.
+
 ### Upgrade notes
 
 - **Reinstall the helper on every patch host:** `aptwarden helper show --install | ssh

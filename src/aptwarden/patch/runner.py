@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from aptwarden import health
 from aptwarden.config import HostConfig, parse_duration
 from aptwarden.definitions import Definition
+from aptwarden.log import safe
 from aptwarden.models import Finding, HostInventory
 from aptwarden.patch import apt, planner
 from aptwarden.snapshot import (
@@ -97,6 +98,9 @@ def policy_skip_reason(findings: list[Finding], policy: dict) -> str:
 
 class PatchAbort(Exception):
     """Stop before anything was changed."""
+
+    def __init__(self, message: str):
+        super().__init__(safe(message, keep_newlines=True))  # may contain the host's stderr
 
 
 @dataclass

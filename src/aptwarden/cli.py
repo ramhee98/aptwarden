@@ -685,6 +685,17 @@ def ownership_problem(dirs, euid: int, owner_of=lambda p: p.stat().st_uid) -> st
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Output shows text from target hosts (package data, remote errors) in many places, so
+    # control characters are escaped for all of it. aptwarden prints none on purpose.
+    stdout, stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = aplog.SafeStream(stdout), aplog.SafeStream(stderr)
+    try:
+        return _main(argv)
+    finally:
+        sys.stdout, sys.stderr = stdout, stderr
+
+
+def _main(argv: list[str] | None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
