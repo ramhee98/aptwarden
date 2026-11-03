@@ -17,12 +17,13 @@ testing only.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
 import subprocess
 import tarfile
+import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +34,42 @@ log = logging.getLogger(__name__)
 
 class SyncError(Exception):
     pass
+
+
+class ArchiveRejected(SyncError):
+    """The definitions archive of a commit breaks a limit or holds unexpected
+    entries; the tag is rejected like invalid content."""
+
+
+# Limits for the archive of one commit, enforced while streaming it, before
+# anything is read in full. The real repository holds a few files of 1-2 kB.
+MAX_ARCHIVE = 32 * 2**20  # bytes of tar stream from git archive
+MAX_ENTRIES = 5000  # tar entries (files and directories)
+MAX_FILE = 256 * 1024  # one definition file
+MAX_TOTAL = 16 * 2**20  # all definition files together
+
+
+def _size(n: int) -> str:
+    for unit, factor in (("MiB", 2**20), ("KiB", 1024)):
+        if n >= factor:
+            return f"{n / factor:g} {unit}"
+    return f"{n} bytes"
+
+
+class _Limited:
+    """A read-only stream that fails once more than ``limit`` bytes were read."""
+
+    def __init__(self, fp, limit: int):
+        self.fp = fp
+        self.limit = limit
+        self.count = 0
+
+    def read(self, n: int = -1) -> bytes:
+        data = self.fp.read(n if n is not None and n >= 0 else self.limit + 1 - self.count)
+        self.count += len(data)
+        if self.count > self.limit:
+            raise ArchiveRejected(f"archive larger than {_size(self.limit)}")
+        return data
 
 
 @dataclass
@@ -56,8 +93,7 @@ class GitSync:
         self.repo_dir = repo_dir
         self.allowed_signers = allowed_signers
 
-    def _git(self, *args: str, check: bool = True, binary: bool = False,
-             timeout: int = 120) -> subprocess.CompletedProcess:
+    def _command(self, *args: str) -> tuple[list[str], dict[str, str]]:
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "HOME": os.environ.get("HOME", "/nonexistent"),
@@ -70,8 +106,13 @@ class GitSync:
         cmd = ["git", "-C", str(self.repo_dir), "-c", "gpg.format=ssh"]
         if self.allowed_signers:
             cmd += ["-c", f"gpg.ssh.allowedSignersFile={self.allowed_signers}"]
+        return cmd + list(args), env
+
+    def _git(self, *args: str, check: bool = True, binary: bool = False,
+             timeout: int = 120) -> subprocess.CompletedProcess:
+        cmd, env = self._command(*args)
         try:
-            p = subprocess.run(cmd + list(args), capture_output=True, text=not binary,
+            p = subprocess.run(cmd, capture_output=True, text=not binary,
                                env=env, timeout=timeout, check=False)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise SyncError(f"git {args[0]}: {e}") from e
@@ -118,23 +159,49 @@ class GitSync:
         return self._git("merge-base", "--is-ancestor", ancestor, commit,
                          check=False).returncode == 0
 
-    def read_files(self, commit: str) -> dict[str, str]:
+    def read_files(self, commit: str, timeout: int = 120) -> dict[str, str]:
+        """The definition files of ``commit`` as {path below settings.path: text}.
+        The archive is streamed from git with the limits above; breaking one
+        raises ArchiveRejected."""
         path = self.settings["path"].strip("/")
-        p = self._git("archive", "--format=tar", commit, "--", path, check=False, binary=True)
-        if p.returncode != 0:
-            if b"did not match any files" in p.stderr:
+        cmd, env = self._command("archive", "--format=tar", commit, "--", path)
+        files: dict[str, str] = {}
+        unreadable: tarfile.TarError | None = None
+        try:
+            with tempfile.TemporaryFile() as err, subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=err, env=env) as proc:
+                timer = threading.Timer(timeout, proc.kill)
+                timer.start()
+                try:
+                    files = _untar(proc.stdout, path)
+                except tarfile.TarError as e:  # empty or broken stream; see stderr
+                    unreadable = e
+                except BaseException:
+                    proc.kill()
+                    raise
+                finally:
+                    timer.cancel()
+                    proc.stdout.close()
+                returncode = proc.wait()
+                err.seek(0)
+                stderr = err.read(64 * 1024).decode(errors="replace").strip()
+        except OSError as e:
+            raise SyncError(f"git archive: {e}") from e
+        if returncode != 0:
+            if "did not match any files" in stderr:
                 return {}
-            raise SyncError(f"git archive failed: {p.stderr.decode(errors='replace').strip()}")
-        files = {}
-        with tarfile.open(fileobj=io.BytesIO(p.stdout)) as tar:
-            for member in tar.getmembers():
-                if member.isfile() and member.name.endswith((".yaml", ".yml")):
-                    data = tar.extractfile(member).read()  # type: ignore[union-attr]
-                    files[member.name.removeprefix(path + "/")] = data.decode("utf-8")
+            raise SyncError(f"git archive failed: {stderr or f'exit {returncode}'}")
+        if unreadable is not None:
+            raise ArchiveRejected(f"unreadable archive: {unreadable}")
         return files
 
     def _load(self, commit: str, ref: str, result: SyncResult) -> bool:
-        loaded = load_files(self.read_files(commit))
+        try:
+            files = self.read_files(commit)
+        except ArchiveRejected as e:
+            result.problems.append(f"{ref}: definitions archive rejected, ignored: {e}")
+            return False
+        loaded = load_files(files)
         result.warnings += [f"{ref}: {w}" for w in loaded.warnings]
         if not loaded.ok:
             result.problems += [f"{ref}: invalid definitions, ignored: {e}" for e in loaded.errors]
@@ -192,3 +259,34 @@ class GitSync:
                                                         "definitions": len(result.definitions)})
             break
         return result
+
+
+def _untar(stream, path: str) -> dict[str, str]:
+    """Read definition files from a tar stream, checking every limit on the
+    member header before its data is read."""
+    files: dict[str, str] = {}
+    total = 0
+    with tarfile.open(fileobj=_Limited(stream, MAX_ARCHIVE), mode="r|") as tar:
+        for n, member in enumerate(tar, 1):
+            if n > MAX_ENTRIES:
+                raise ArchiveRejected(f"more than {MAX_ENTRIES} entries")
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise ArchiveRejected(f"{member.name}: unexpected entry type (symlink, device "
+                                      f"or link); only regular files and directories")
+            if not member.name.endswith((".yaml", ".yml")):
+                continue  # e.g. a README; skipped without reading it
+            if member.size > MAX_FILE:
+                raise ArchiveRejected(f"{member.name}: {member.size} bytes, more than "
+                                      f"{_size(MAX_FILE)}")
+            total += member.size
+            if total > MAX_TOTAL:
+                raise ArchiveRejected(f"definition files larger than {_size(MAX_TOTAL)} "
+                                      f"together")
+            data = tar.extractfile(member).read(MAX_FILE + 1)  # type: ignore[union-attr]
+            try:
+                files[member.name.removeprefix(path + "/")] = data.decode("utf-8")
+            except UnicodeDecodeError:
+                raise ArchiveRejected(f"{member.name}: not UTF-8") from None
+    return files

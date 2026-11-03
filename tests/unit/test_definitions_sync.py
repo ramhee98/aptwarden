@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from aptwarden.definitions import sync as sync_mod
 from aptwarden.definitions.sync import GitSync, SyncError, tag_sort_key
 from tests.unit.test_definitions import VALID, defn
 
@@ -167,3 +168,84 @@ def test_unreachable_upstream(env, tmp_path):
     sync.settings = {**sync.settings, "url": str(tmp_path / "missing")}
     with pytest.raises(SyncError, match="fetch"):
         sync.sync(None, set())
+
+
+# --- archive limits (SEC-02) -------------------------------------------------
+
+def add_raw(up, name, data: bytes | None = None, symlink_to: str | None = None):
+    p = up.path / "definitions" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if symlink_to:
+        p.symlink_to(symlink_to)
+    else:
+        p.write_bytes(data)
+
+
+def rejected_after_valid(up, sync, change):
+    """A valid signed tag, then a newer signed tag made by ``change``: the newer
+    one must be rejected with a problem, the valid state kept."""
+    c1 = up.commit({"2026/AW-2026-0001.yaml": VALID})
+    up.tag("v2026.10.21")
+    change()
+    up.git("add", "-A")
+    up.git("commit", "-q", "-m", "bad")
+    up.tag("v2026.10.22")
+    r = sync.sync(c1, set())
+    assert not r.changed and r.rejected == ["v2026.10.22"]
+    assert len(r.problems) == 1 and "definitions archive rejected" in r.problems[0]
+    return r.problems[0]
+
+
+def test_too_many_entries(env, monkeypatch):
+    up, sync = env
+    monkeypatch.setattr(sync_mod, "MAX_ENTRIES", 5)
+    problem = rejected_after_valid(up, sync, lambda: [
+        add_raw(up, f"2026/x{i}.txt", b"x") for i in range(10)])
+    assert "more than 5 entries" in problem
+
+
+def test_oversized_definition_file(env, monkeypatch):
+    up, sync = env
+    monkeypatch.setattr(sync_mod, "MAX_FILE", 1024)
+    problem = rejected_after_valid(up, sync, lambda: add_raw(
+        up, "2026/AW-2026-0002.yaml", b"# " + b"x" * 2000 + b"\n"))
+    assert "AW-2026-0002.yaml: 2003 bytes, more than 1 KiB" in problem
+
+
+def test_definition_files_too_large_together(env, monkeypatch):
+    up, sync = env
+    monkeypatch.setattr(sync_mod, "MAX_TOTAL", 4096)
+    problem = rejected_after_valid(up, sync, lambda: [
+        add_raw(up, f"2026/AW-2026-{i:04d}.yaml", b"#" * 1000 + b"\n") for i in range(2, 8)])
+    assert "larger than 4 KiB together" in problem
+
+
+def test_oversized_archive(env, monkeypatch):
+    up, sync = env
+    monkeypatch.setattr(sync_mod, "MAX_ARCHIVE", 64 * 1024)
+    # not a definition file, but still part of the archive stream
+    problem = rejected_after_valid(up, sync, lambda: add_raw(
+        up, "blob.bin", os.urandom(200 * 1024)))
+    assert "archive larger than 64 KiB" in problem
+
+
+def test_symlink_is_rejected(env):
+    up, sync = env
+    problem = rejected_after_valid(up, sync, lambda: add_raw(
+        up, "2026/AW-2026-0002.yaml", symlink_to="/etc/passwd"))
+    assert "AW-2026-0002.yaml: unexpected entry type" in problem
+
+
+def test_non_utf8_definition_is_rejected(env):
+    up, sync = env
+    problem = rejected_after_valid(up, sync, lambda: add_raw(
+        up, "2026/AW-2026-0002.yaml", b"id: \xff\xfe\n"))
+    assert "not UTF-8" in problem
+
+
+def test_readme_is_skipped_unread(env):
+    up, sync = env
+    up.commit({"2026/AW-2026-0001.yaml": VALID, "README.md": "# not a definition\n"})
+    up.tag("v2026.10.21")
+    r = sync.sync(None, set())
+    assert r.changed and [d.id for d in r.definitions] == ["AW-2026-0001"]

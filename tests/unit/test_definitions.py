@@ -117,3 +117,10 @@ def test_load_dir(tmp_path):
     (tmp_path / "notes.txt").write_text("ignored")
     result = load_dir(tmp_path)
     assert result.ok and [d.id for d in result.definitions] == ["AW-2026-0001"]
+
+
+def test_yaml_aliases_are_rejected():
+    bomb = "a: &a [x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a]\n" \
+           "c: [*b, *b, *b, *b, *b, *b, *b, *b, *b]\n"
+    d, errors, _ = parse(bomb, "AW-2026-0009.yaml")
+    assert d is None and errors == ["AW-2026-0009.yaml: YAML aliases are not allowed"]

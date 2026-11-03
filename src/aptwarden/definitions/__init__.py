@@ -153,6 +153,10 @@ def _semantic_errors(d: dict) -> list[str]:
 def parse(text: str, name: str) -> tuple[Definition | None, list[str], list[str]]:
     """Parse and validate one definition file. Returns (definition, errors, warnings)."""
     try:
+        # Definitions need no anchors or aliases; refusing them rules out
+        # alias bombs ("billion laughs") before anything is built.
+        if any(isinstance(ev, yaml.AliasEvent) for ev in yaml.parse(text, Loader=yaml.SafeLoader)):
+            return None, [f"{name}: YAML aliases are not allowed"], []
         data = yaml.safe_load(text)
     except yaml.YAMLError as e:
         return None, [f"{name}: invalid YAML: {e}"], []
