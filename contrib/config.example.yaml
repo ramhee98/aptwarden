@@ -114,6 +114,9 @@ health:                            # timing of the post-patch healthchecks
   interval: 5s
   connect_to: null                 # default for http checks from the central host, e.g. the
                                    # reverse proxy's internal IP (a check's own value wins)
+  redirects: same-host             # follow redirects to the same host only; any | none
+  allowed_networks: []             # e.g. [192.0.2.0/24]: checks from the central host may
+                                   # only connect there (also after redirects)
 
 hosts:
   # A simple web service in an LXC container: the typical auto-patch candidate.

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import json
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
@@ -47,7 +49,8 @@ DEFAULTS: dict = {
         "allow_extra_upgrades": False,
         "allow_new_packages": [],
     },
-    "health": {"grace": "10s", "retries": 6, "interval": "5s", "connect_to": None},
+    "health": {"grace": "10s", "retries": 6, "interval": "5s", "connect_to": None,
+               "redirects": "same-host", "allowed_networks": []},
     "snapshots": {"keep": "7d", "vmstate": False},
     "status_page": {"enabled": True, "path": None, "mode": "0640"},
     "sources": {
@@ -388,23 +391,50 @@ def _check_dependencies(hosts: list[HostConfig]) -> None:
 
 
 def _healthchecks(host: dict, health: dict) -> list[dict]:
-    """Validate connect_to and apply the health default to HTTP checks that run
-    from the central host. A check's own connect_to wins; on-host checks only
-    use one set directly on the check."""
+    """Validate connect_to and allowed networks, and apply the health defaults:
+    connect_to to HTTP checks that run from the central host (a check's own
+    wins; on-host checks only use one set directly on the check), redirects to
+    every HTTP check, allowed_networks to HTTP and TCP checks from the central
+    host."""
     from aptwarden.health import parse_connect_to  # avoid an import cycle at load time
+
+    name = host["name"]
+    try:
+        networks = [ipaddress.ip_network(n, strict=False) for n in health["allowed_networks"]]
+    except ValueError as e:
+        raise ConfigError(f"host {name}: health.allowed_networks: {e}") from None
+
+    def allowed(address: str, what: str) -> None:
+        try:
+            ip = ipaddress.ip_address(address.strip("[]"))
+        except ValueError:
+            return  # a host name: checked when the check runs
+        if networks and not any(ip in n for n in networks):
+            raise ConfigError(f"host {name}: {what} {address} is outside "
+                              f"health.allowed_networks")
 
     checks = []
     for raw in host.get("healthchecks", []):
         check = dict(raw)
+        central = not check.get("on_host")
         if "http" in check:
-            if (health.get("connect_to") and "connect_to" not in check
-                    and not check.get("on_host")):
+            check.setdefault("redirects", health["redirects"])
+            if health.get("connect_to") and "connect_to" not in check and central:
                 check["connect_to"] = health["connect_to"]
+            url_host = urllib.parse.urlsplit(check["http"]).hostname or ""
             if check.get("connect_to"):
                 try:
-                    parse_connect_to(check["connect_to"], 443)
+                    address, _ = parse_connect_to(check["connect_to"], 443)
                 except ValueError as e:
-                    raise ConfigError(f"host {host['name']}: {e}") from None
+                    raise ConfigError(f"host {name}: {e}") from None
+                if central:
+                    allowed(address, "connect_to")
+            elif central:
+                allowed(url_host, "http check")
+        if "tcp" in check and central:
+            allowed(check["tcp"].rpartition(":")[0], "tcp check")
+        if networks and central and ("http" in check or "tcp" in check):
+            check["allowed_networks"] = [str(n) for n in networks]
         checks.append(check)
     return checks
 

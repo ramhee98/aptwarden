@@ -690,6 +690,22 @@
             "string",
             "null"
           ]
+        },
+        "redirects": {
+          "description": "Which redirects HTTP checks follow: same-host (default), any, none",
+          "enum": [
+            "same-host",
+            "any",
+            "none"
+          ]
+        },
+        "allowed_networks": {
+          "description": "If set, HTTP and TCP checks from the central host connect only to addresses in these networks (CIDR), also after redirects",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
@@ -754,6 +770,14 @@
               "description": "Connect to this address (ip, ip:port or [ipv6]:port) instead of resolving the URL's host; SNI, Host header and certificate check keep the URL's host name",
               "type": "string",
               "minLength": 1
+            },
+            "redirects": {
+              "description": "Overrides health.redirects for this check",
+              "enum": [
+                "same-host",
+                "any",
+                "none"
+              ]
             }
           }
         },

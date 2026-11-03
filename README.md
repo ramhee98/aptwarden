@@ -529,6 +529,38 @@ healthchecks:
   `health` never applies to on-host checks.
 - **Shown in check names**, e.g. `http https://blog.example.org/healthz (via 192.0.2.11)`.
 
+### Redirects and allowed networks
+
+Checks come from the configuration, so their targets are trusted like the rest of it.
+The checked service is not: a compromised web server could redirect the central host's
+check to internal services (the Proxmox API, services on the central host itself).
+
+```yaml
+health:
+  redirects: same-host          # default; any | none, also per check
+  allowed_networks: [192.0.2.0/24, 2001:db8:10::/48]   # default []: no restriction
+```
+
+- **`redirects`:**
+  - `same-host` follows only redirects to the URL's own host, e.g. `http://` to
+    `https://`.
+  - `any` follows every redirect.
+  - `none` follows none.
+
+  Only `http` and `https` are followed, at most 5 times. A redirect that is not followed
+  is judged as the 3xx response it is: with `expect_status: 302` the check passes,
+  otherwise it fails with `redirect to … not followed`. On-host checks follow the same
+  rules.
+- **`allowed_networks`:** checks from the central host connect only to addresses in
+  these networks.
+  - **Applies to:** HTTP and TCP checks, `connect_to` and every redirect.
+  - **DNS rebinding:** a name is resolved once, the address checked, and the connection
+    opened to exactly that address, so a second DNS answer cannot change the target.
+  - **Proxies:** proxies from the environment are not used while the list is set.
+  - **At config load:** addresses written as IPs (in the URL, `tcp` or `connect_to`)
+    are checked already then. Host names are checked when the check runs.
+  - **On-host checks are not restricted**; they run on the target itself.
+
 ### Timer and maintenance windows
 
 Windows are wall-clock times in `policy.timezone`, an IANA name such as `Europe/Zurich`
