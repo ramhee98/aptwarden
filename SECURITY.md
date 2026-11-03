@@ -134,4 +134,6 @@ The CI workflow runs three kinds of checks:
   push and weekly.
 
 Release tags get a CycloneDX SBOM. Actions are pinned to commit SHAs, and Dependabot
-keeps them current.
+keeps them current. It proposes a new version only once it is 7 days old, by when
+compromised or broken releases are usually found and pulled; security updates come
+right away.

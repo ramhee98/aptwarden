@@ -895,7 +895,8 @@ git push origin v0.3.0
 CI also runs [bandit](https://bandit.readthedocs.io/) on `src` and
 [pip-audit](https://pypi.org/project/pip-audit/) on the dependencies, on every push and
 weekly. For release tags it attaches a CycloneDX SBOM (`sbom` artifact). Dependabot
-keeps the pinned action SHAs current.
+keeps the pinned action SHAs current, proposing a new version only once it is a week
+old (security updates right away).
 
 ## Security
 
