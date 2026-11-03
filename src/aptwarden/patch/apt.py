@@ -38,7 +38,15 @@ class Simulation:
 
 def parse_simulation(text: str) -> Simulation:
     sim = Simulation()
+    removed: list[str] = []
+    in_removed = False
     for line in text.splitlines():
+        # With --no-remove apt prints the packages it would remove in this block and fails
+        # with an error instead of simulating "Remv" lines.
+        if in_removed and line[:1].isspace():
+            removed += [base_name(p.rstrip("*")) for p in line.split()]  # "*": purge
+            continue
+        in_removed = line == "The following packages will be REMOVED:"
         if m := _INST.match(line):
             name, old, new = base_name(m.group(1)), m.group(2), m.group(3)
             if old:
@@ -46,9 +54,10 @@ def parse_simulation(text: str) -> Simulation:
             else:
                 sim.new[name] = new
         elif m := _REMV.match(line):
-            sim.removals.append(base_name(m.group(1)))
+            removed.append(base_name(m.group(1)))
         elif line.startswith("E: "):
             sim.errors.append(line[3:].strip())
+    sim.removals = list(dict.fromkeys(removed))
     return sim
 
 
@@ -72,6 +81,14 @@ def check_simulation(sim: Simulation, planned: dict[str, str], *,
             if name not in planned:
                 problems.append(f"would also upgrade {name} {old} -> {new} (not in the plan)")
     return problems
+
+
+def allowed_extras(sim: Simulation, planned: dict[str, str]) -> list[str]:
+    """``package=version`` for everything the simulation installs beyond the plan, sorted.
+    Only called after check_simulation() accepted these."""
+    extras = {name: new for name, (_, new) in sim.upgrades.items() if name not in planned}
+    extras.update(sim.new)
+    return [f"{name}={version}" for name, version in sorted(extras.items())]
 
 
 def parse_needrestart(text: str) -> tuple[list[str], bool]:

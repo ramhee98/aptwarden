@@ -32,6 +32,34 @@ def test_parse_simulation_new_removed_errors():
     assert "held broken packages" in sim.errors[0]
 
 
+# apt 3.0.3 with --no-remove, captured on Debian 13
+NO_REMOVE = """Reading package lists...
+Building dependency tree...
+Reading state information...
+The following packages will be REMOVED:
+  systemd-timesyncd libfoo1:i386*
+The following NEW packages will be installed:
+  chrony
+0 upgraded, 1 newly installed, 2 to remove and 0 not upgraded.
+E: Packages need to be removed but remove is disabled.
+"""
+
+
+def test_parse_simulation_no_remove():
+    sim = apt.parse_simulation(NO_REMOVE + "Remv systemd-timesyncd [257.13-1~deb13u1]\n")
+    assert sim.removals == ["systemd-timesyncd", "libfoo1"]
+    assert sim.errors == ["Packages need to be removed but remove is disabled."]
+    assert sim.new == {} and sim.upgrades == {}  # the summary block is not parsed
+
+
+def test_allowed_extras():
+    sim = apt.parse_simulation(SIM + "Inst libnew1 (1.0-1 Debian:13/stable [amd64])\n")
+    assert apt.allowed_extras(sim, {"openssl": "3.5.7-1~deb13u3"}) == [
+        "libnew1=1.0-1", "libssl3t64=3.5.7-1~deb13u3", "openssl-provider-legacy=3.5.7-1~deb13u3"]
+    planned = {name: new for name, (_, new) in sim.upgrades.items()}
+    assert apt.allowed_extras(apt.parse_simulation(SIM), planned) == []
+
+
 def test_check_simulation():
     sim = apt.parse_simulation(SIM)
     planned = {"openssl": "3.5.7-1~deb13u3", "libssl3t64": "3.5.7-1~deb13u3",
@@ -50,6 +78,88 @@ def test_check_simulation():
     problems = apt.check_simulation(bad, {})
     assert problems == ["apt error: broken", "would remove y", "would newly install x 1"]
     assert apt.check_simulation(bad, {}, allow_new_packages=("x",))[-1] == "would remove y"
+
+
+# --- the root helper ----------------------------------------------------------------
+
+def run_helper(tmp_path, *args, sim="", sim_rc=0):
+    """Run the real helper with a fake apt-get; returns (result, apt-get calls)."""
+    import subprocess
+    from importlib import resources
+
+    text = resources.files("aptwarden").joinpath("helper/aptwarden-helper").read_text()
+    guard = '[ "$(id -u)" != 0 ]'  # the test hook is off for root, also when testing as root
+    assert guard in text
+    helper = tmp_path / "aptwarden-helper"
+    helper.write_text(text.replace(guard, "true"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (tmp_path / "sim.txt").write_text(sim)
+    log = tmp_path / "apt-get.log"
+    log.write_text("")
+    fake = bin_dir / "apt-get"
+    fake.write_text(f'#!/bin/sh\necho "$*" >> {log}\n'
+                    f'case " $* " in *" -s "*) cat {tmp_path / "sim.txt"}; exit {sim_rc} ;; esac\n')
+    fake.chmod(0o755)
+    r = subprocess.run(["sh", str(helper), *args], capture_output=True, text=True,
+                       env={"APTWARDEN_HELPER_TESTBIN": str(bin_dir)})
+    return r, log.read_text().splitlines()
+
+
+PLAN = ["openssl=3.5.7-1~deb13u3", "libssl3t64:amd64=3.5.7-1~deb13u3",
+        "openssl-provider-legacy=3.5.7-1~deb13u3"]
+
+
+def test_helper_installs_the_simulated_transaction(tmp_path):
+    r, calls = run_helper(tmp_path, "install", *PLAN, sim=SIM)
+    assert r.returncode == 0, r.stderr
+    assert len(calls) == 2 and " -s install -- " in calls[0]
+    assert calls[1].endswith("install -- " + " ".join(PLAN)) and " -s " not in calls[1]
+    assert all("--only-upgrade --no-remove" in c for c in calls)
+
+
+def test_helper_version(tmp_path):
+    from aptwarden.patch.runner import HELPER_VERSION
+
+    r, _ = run_helper(tmp_path, "version")
+    assert r.stdout == f"aptwarden-helper {HELPER_VERSION}\n"
+
+
+@pytest.mark.parametrize("args, sim, sim_rc, error", [
+    # an upgrade nobody asked for (the lists changed since the central simulation)
+    (PLAN[:2], SIM, 0, "would install openssl-provider-legacy 3.5.7-1~deb13u3, which was not"),
+    # a new dependency
+    (PLAN, SIM + "Inst libnew1 (1.0-1 Debian:13/stable [amd64])\n", 0,
+     "would install libnew1 1.0-1"),
+    # another version than requested
+    (PLAN, SIM.replace("Inst openssl [3.5.1-1+deb13u1] (3.5.7-1~deb13u3",
+                       "Inst openssl [3.5.1-1+deb13u1] (3.5.7-1~deb13u4"), 0,
+     "would install openssl 3.5.7-1~deb13u4"),
+    (PLAN, SIM + "Remv systemd-timesyncd [257.13-1~deb13u1]\n", 0,
+     "would remove systemd-timesyncd [257.13-1~deb13u1]"),
+    (PLAN, NO_REMOVE, 100, "simulation failed"),
+], ids=["extra-upgrade", "new-dependency", "other-version", "removal", "no-remove-error"])
+def test_helper_refuses_other_transactions(tmp_path, args, sim, sim_rc, error):
+    r, calls = run_helper(tmp_path, "install", *args, sim=sim, sim_rc=sim_rc)
+    assert r.returncode == 2 and error in r.stderr and "nothing installed" in r.stderr
+    assert len(calls) == 1 and " -s " in calls[0]  # only the simulation ran
+    if sim_rc:
+        assert "E: Packages need to be removed but remove is disabled." in r.stderr
+
+
+def test_helper_accepts_named_extras(tmp_path):
+    sim = SIM + "Inst libnew1 (1.0-1 Debian:13/stable [amd64])\n"
+    r, calls = run_helper(tmp_path, "install", *PLAN, "libnew1=1.0-1", sim=sim)
+    assert r.returncode == 0, r.stderr
+    assert len(calls) == 2
+
+
+def test_helper_simulate_cannot_remove(tmp_path):
+    r, calls = run_helper(tmp_path, "simulate", *PLAN, sim=SIM)
+    assert r.returncode == 0 and r.stdout == SIM
+    assert calls == [f"-q -y --only-upgrade --no-remove --no-install-recommends "
+                     f"-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "
+                     f"-o DPkg::Lock::Timeout=300 -s install -- {' '.join(PLAN)}"]
 
 
 def test_parse_policy_with_arch_and_none():

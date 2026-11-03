@@ -5,12 +5,13 @@
 # and allow it, and nothing else, in /etc/sudoers.d/aptwarden. A sudoers rule
 # on apt-get itself would be root for anyone who can pass options
 # (-o APT::Update::Pre-Invoke::=/bin/sh). This script only accepts fixed
-# subcommands and strictly validated "package=version" arguments, and only
-# ever upgrades packages that are already installed.
+# subcommands and strictly validated "package=version" arguments. install
+# first simulates the transaction itself and refuses it if apt would install
+# anything that was not named with exactly that version, or remove anything.
 set -eu
 set -f  # no globbing of arguments
 
-HELPER_VERSION=1
+HELPER_VERSION=2
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # Test hook for aptwarden's own test suite. Never honoured as root, so it has
@@ -27,12 +28,15 @@ export NEEDRESTART_SUSPEND=1
 export UCF_FORCE_CONFFOLD=1
 umask 022
 
+# Exit status 2 means refused before apt ran, so nothing changed. aptwarden
+# relies on this.
 die() {
     echo "aptwarden-helper: $*" >&2
     exit 2
 }
 
-APT_OPTS="-q -y --only-upgrade --no-install-recommends
+# --no-remove: apt fails instead of removing packages to resolve a conflict.
+APT_OPTS="-q -y --only-upgrade --no-remove --no-install-recommends
     -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
     -o DPkg::Lock::Timeout=300"
 
@@ -62,6 +66,49 @@ check_packages() {
     done
 }
 
+# The simulation on the central host may be outdated when install runs (the
+# package lists can change in between), and --only-upgrade still installs new
+# dependencies. So install simulates again and requires every "Inst" to be one
+# of the named package=version pairs, and no "Remv" at all. Architecture
+# qualifiers are ignored: apt omits them for the native architecture.
+check_transaction() {
+    allowed=" "
+    for arg in "$@"; do
+        pkg=${arg%%=*}
+        allowed="$allowed${pkg%%:*}=${arg#*=} "
+    done
+    # shellcheck disable=SC2086
+    sim=$(apt-get $APT_OPTS -s install -- "$@" 2>&1) || {
+        printf '%s\n' "$sim" >&2
+        die "simulation failed, nothing installed"
+    }
+    while IFS= read -r line; do
+        case "$line" in
+            "Remv "*) die "simulation would remove ${line#Remv }; nothing installed" ;;
+            "Inst "*)
+                # shellcheck disable=SC2086 # word splitting is intended, globbing is off
+                check_inst $line
+                ;;
+        esac
+    done <<EOF
+$sim
+EOF
+}
+
+# check_inst Inst NAME [OLD] (NEW ...
+check_inst() {
+    name=${2%%:*}
+    case "${3:-}" in
+        "["*) new=${4:-} ;;
+        *) new=${3:-} ;;
+    esac
+    new=${new#(}
+    case "$allowed" in
+        *" $name=$new "*) ;;
+        *) die "simulation would install $name $new, which was not requested; nothing installed" ;;
+    esac
+}
+
 cmd=${1:-}
 [ "$#" -gt 0 ] && shift
 
@@ -80,6 +127,7 @@ case "$cmd" in
         ;;
     install)
         check_packages "$@"
+        check_transaction "$@"
         # shellcheck disable=SC2086
         exec apt-get $APT_OPTS install -- "$@"
         ;;

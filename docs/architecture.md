@@ -141,8 +141,12 @@ plan → preflight → simulate → snapshot → apply → restart → healthche
 4. **snapshot:** `aptw_<run-id>` (letters, digits and `_`; at most 40 characters),
    without RAM state unless `snapshots.vmstate`. The snapshot is recorded in
    `state.db`. Only recorded `aptw_` snapshots are ever rolled back to or deleted.
-5. **apply:** helper `install` with the same arguments, followed by a dpkg version
-   check.
+5. **apply:** helper `install` with the same arguments, plus the extra upgrades and new
+   packages the policy allowed, each as `pkg=ver` from the simulation. The helper
+   simulates again and refuses the transaction if it differs (see
+   [Target host privileges](#target-host-privileges)). A refusal (exit status 2)
+   ends the run as `aborted` without a rollback, since nothing changed; the unused
+   snapshot is removed by the normal cleanup. A dpkg version check follows.
 6. **restart:** needrestart `auto` (helper `needrestart restart`), `list` or `off`.
    With `reboot: if-required`, the host reboots when `/run/reboot-required` exists or
    needrestart reports a pending kernel. aptwarden waits until the boot marker changes.
@@ -182,8 +186,14 @@ Target hosts therefore get `/usr/local/lib/aptwarden/aptwarden-helper`
 - **Strict argument checks:** arguments must be `package=version` with a restricted
   character set. Package names start alphanumeric, so options are impossible, and
   `--` separates them for apt.
-- **Upgrades only:** it always runs `--only-upgrade --no-install-recommends` and keeps
-  existing config files.
+- **Only the named transaction:** it always runs `--only-upgrade --no-remove
+  --no-install-recommends` and keeps existing config files. `--only-upgrade` alone still
+  installs new dependencies, and the central simulation can be outdated by the time
+  `install` runs (package lists may change in between). So `install` simulates again
+  and aborts, before changing anything, if apt would install a package that is not
+  among its `package=version` arguments, a different version, or remove anything. What
+  remains is the short gap between this simulation and the install, not the whole
+  snapshot step.
 - **Fixed environment:** `PATH`, `DEBIAN_FRONTEND=noninteractive`, and
   `NEEDRESTART_SUSPEND` (needrestart runs explicitly with the host's mode).
 

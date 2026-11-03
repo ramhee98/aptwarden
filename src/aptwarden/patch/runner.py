@@ -32,7 +32,10 @@ from aptwarden.transport import Transport, TransportError
 
 log = logging.getLogger(__name__)
 
-HELPER_VERSION = "1"
+HELPER_VERSION = "2"
+# The helper's exit status when it refuses a call. It only exits so before running apt, so
+# nothing on the host changed.
+HELPER_REFUSED = 2
 
 # Statuses that need a human: they raise an immediate alert.
 ALERT_STATUSES = frozenset({"rolled-back", "needs-manual-rollback", "failed", "rollback-failed"})
@@ -251,6 +254,9 @@ class PatchRunner:
                 result.notes.append(f"dependency upgrade {name} -> {new}")
         if result.problems:
             raise PatchAbort("simulation: " + "; ".join(result.problems))
+        # The helper installs only what it is given explicitly, so the extra upgrades and new
+        # packages the policy allowed are named with the version from the simulation.
+        install_args = args + apt.allowed_extras(sim, planned)
 
         if result.dry_run:
             result.health_before = [str(c) for c in health.run_all(host.healthchecks, t)]
@@ -277,7 +283,11 @@ class PatchRunner:
             result.snapshot = asdict(ref)
 
         result.stage = "apply"
-        out = self._helper(t, host, "install", *args, timeout=3600)
+        out = self._helper(t, host, "install", *install_args, timeout=3600)
+        if out.returncode == HELPER_REFUSED:
+            # e.g. the package lists changed since the simulation; the snapshot is unused
+            raise PatchAbort("helper refused the install, nothing changed: "
+                             + (out.stderr or out.stdout).strip()[-800:])
         if out.returncode != 0:
             raise TransportError("apt-get install failed: "
                                  + (out.stderr or out.stdout).strip()[-800:])

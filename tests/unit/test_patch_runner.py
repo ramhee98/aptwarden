@@ -26,6 +26,7 @@ class Host:
     healthy_after_install: bool = True
     helper_ok: bool = True
     install_fails: bool = False
+    install_refused: bool = False
     extra_sim: str = ""
     needrestart: str | None = "NEEDRESTART-SVC: ssh.service\n"
     reboot_required: bool = False
@@ -53,7 +54,7 @@ class ScriptedTransport(Transport):
             if not h.helper_ok:
                 return ok(rc=1, err="sudo: a password is required")
             if cmd == "version":
-                return ok("aptwarden-helper 1\n")
+                return ok("aptwarden-helper 2\n")
             if cmd == "update":
                 return ok()
             if cmd == "simulate":
@@ -65,6 +66,9 @@ class ScriptedTransport(Transport):
                                  f"[amd64])")
                 return ok("\n".join(lines) + "\n" + h.extra_sim)
             if cmd == "install":
+                if h.install_refused:
+                    return ok(rc=2, err="aptwarden-helper: simulation would install libc6 "
+                                        "2.41-12+deb13u4, which was not requested; nothing installed")
                 if h.install_fails:
                     return ok(rc=100, err="E: Sub-process /usr/bin/dpkg returned an error code")
                 for a in args:
@@ -248,6 +252,17 @@ def test_install_failure_rolls_back(state):
     assert "apt-get install failed" in result.reason
 
 
+def test_helper_refusal_aborts_without_rollback(state):
+    # the helper's own simulation differs from the central one (lists changed in between)
+    h = openssl_host(install_refused=True)
+    result, provider = run(state, h)
+    assert result.status == "aborted" and result.stage == "apply" and not result.alert
+    assert result.reason.startswith("helper refused the install, nothing changed: ")
+    assert "would install libc6" in result.reason
+    assert provider.rolled_back == [] and h.installed["openssl"] == "3.5.1-1"
+    assert result.snapshot  # recorded, removed by the normal cleanup
+
+
 def test_simulation_problems_abort_before_snapshot(state):
     h = openssl_host(extra_sim="Remv libimportant [1.0-1]\nInst libnew1 (2.0 Debian:13 [amd64])\n")
     result, provider = run(state, h)
@@ -265,6 +280,24 @@ def test_extra_dependency_upgrade_policy(state):
                     cfg=host_config({"allow_extra_upgrades": True}))
     assert result.status == "patched"
     assert "dependency upgrade libc6 -> 2.41-12+deb13u4" in result.notes
+
+
+def test_allowed_extras_are_passed_to_install(state):
+    # the helper installs only what it is given, so allowed extras must be named explicitly
+    extra = ("Inst libc6 [2.41-12] (2.41-12+deb13u4 Debian-Security:13 [amd64])\n"
+             "Inst libnew1 (2.0 Debian:13 [amd64])\n")
+    h = openssl_host(extra_sim=extra)
+    result, _ = run(state, h, cfg=host_config({"allow_extra_upgrades": True,
+                                               "allow_new_packages": ["libnew1"]}))
+    assert result.status == "patched", result.reason
+    simulate, = helper_calls(h, "simulate")
+    install, = helper_calls(h, "install")
+    assert simulate[4:] == ["libssl3t64:amd64=3.5.7-1", "openssl=3.5.7-1"]
+    assert install[4:] == simulate[4:] + ["libc6=2.41-12+deb13u4", "libnew1=2.0"]
+    # without the policy nothing beyond the plan is ever passed
+    h = openssl_host()
+    run(state, h)
+    assert helper_calls(h, "install")[0][4:] == helper_calls(h, "simulate")[0][4:]
 
 
 def test_unhealthy_before_patch_aborts(state):
@@ -391,7 +424,8 @@ def test_manual_rollback(state):
 
 # real messages captured from a Debian 13 host
 @pytest.mark.parametrize("stdout, stderr, expected", [
-    ("aptwarden-helper 1\n", "", None),
+    ("aptwarden-helper 2\n", "", None),
+    ("aptwarden-helper 1\n", "", "outdated helper (aptwarden-helper 1, expected version 2)"),
     ("", "env: ‘sudo’: No such file or directory", "sudo is not installed"),
     ("", "sudo: a password is required", "no sudo rule for the helper"),
     ("", f"sudo: {HELPER}: command not found", "the helper is not installed at"),

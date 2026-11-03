@@ -328,7 +328,7 @@ Patching is opt-in per host. Every configured host is always included in reports
 | preflight | Helper reachable via sudo, snapshot feature available, healthchecks configured **and passing** | `aborted` |
 | simulate | `apt-get -s` with exactly the planned `package=version`s. Any removal, new package or upgrade outside the plan stops the run (`allow_new_packages`, `allow_extra_upgrades`). | `aborted` |
 | snapshot | Proxmox snapshot `aptw_<run-id>`, without RAM state by default | `aborted` |
-| apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg | rollback |
+| apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg. The helper simulates again right before and refuses to install anything it was not given as `package=version`, or to remove anything. Extras allowed by the policy are passed explicitly. | rollback |
 | restart | needrestart `auto` / `list` / `off`; reboot `never` / `if-required` | rollback |
 | healthcheck | systemd units on the host; HTTP and TCP from the central host or, with `on_host`, on the host itself; with grace period and retries | rollback, or alert only with `rollback: manual` |
 
@@ -351,9 +351,10 @@ database writes. The window is minutes, but for mail and database hosts consider
 ### Target hosts: helper and sudo
 
 A sudoers rule on `apt-get` itself would be root for anyone who can pass options. Target
-hosts therefore get a small root-owned helper. It has fixed subcommands, validates every
-`package=version` and only upgrades installed packages. sudo allows this one script and
-nothing else:
+hosts therefore get a small root-owned helper. It has fixed subcommands and validates every
+`package=version`. Before it installs, it simulates the transaction itself and refuses it
+if apt would install anything not named with exactly that version, or remove anything.
+sudo allows this one script and nothing else:
 
 `aptwarden helper show --install` prints a self-contained script that installs everything
 in one step. Run it as root on the target. The script:
