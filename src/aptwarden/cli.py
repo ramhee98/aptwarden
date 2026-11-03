@@ -627,9 +627,10 @@ rm -f "$tmp"
 out=$(su -s /bin/sh aptwarden -c 'sudo -n {path} version' 2>&1) || true
 if [ "$out" = "aptwarden-helper {helper_version}" ]; then
     echo "ok: $out installed, sudo rule active for user aptwarden"
-    command -v needrestart >/dev/null 2>&1 || \
-        echo "note: needrestart is not installed (services are not restarted after updates;" \
-             "use --with-needrestart)"
+    if ! command -v needrestart >/dev/null 2>&1; then
+        echo "note: needrestart is not installed (services are not restarted after updates;"
+        echo "      use --with-needrestart)"
+    fi
 else
     echo "aptwarden: check failed: $out" >&2
     exit 1

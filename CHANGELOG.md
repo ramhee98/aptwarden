@@ -16,13 +16,11 @@ commits.
   `--only-upgrade` still installed new dependencies. With `allow_extra_upgrades` or
   `allow_new_packages`, the central host now passes the allowed extras explicitly.
   A refusal ends the patch run as `aborted` (nothing changed, no rollback).
-
 - **Host addresses can no longer start with `-` or contain whitespace.** The config
   schema refuses them, and the SSH transport refuses them again before running `ssh`.
   An address like `-oProxyCommand=…` used to reach ssh's argument list as an option.
   It was not exploitable with OpenSSH 9.6 or later, which rejects such a host name,
   so this adds a layer of defence in depth.
-
 - **Definition tags must carry an SSH signature.** git verifies a tag in the format of
   its signature and ignores `gpg.format=ssh` for that, so an OpenPGP-signed tag was
   checked against the keyring of the user aptwarden runs as instead of
@@ -41,9 +39,22 @@ commits.
   id that goes into a request URL is URL-encoded.
 - `aptwarden rollback` and `aptwarden snapshots cleanup` take the patch lock and fail
   while a patch run is active.
+- `notify.email` with a `username` and `security: none` is refused at config load and
+  before login, so the SMTP password is never sent without TLS.
+- The systemd units add `SystemCallFilter=@system-service`, `ProtectProc=invisible`,
+  `ProcSubset=pid`, `PrivateIPC`, `RemoveIPC` and `MemoryDenyWriteExecute`.
+- The nginx example repeats the HSTS header in its `location` (a local `add_header`
+  hides the server block's), and the publishing guide uses bcrypt (`htpasswd -B`) and
+  checks the web server's host key fingerprint before recording it.
+- CI: checkouts keep no credentials, the security tools are pinned with hashes, and
+  ShellCheck, CodeQL, zizmor and gitleaks run in addition to bandit and pip-audit.
 
 ### Upgrade notes
 
 - **Reinstall the helper on every patch host:** `aptwarden helper show --install | ssh
   root@TARGET sh`. Until then, patch runs on that host abort with `outdated helper
   (aptwarden-helper 1, expected version 2)`. Report-only hosts are not affected.
+- **Copy the systemd units again** from `contrib/systemd/` and run
+  `systemctl daemon-reload`.
+- A configuration with `notify.email.username` and `security: none` no longer loads.
+  Use `starttls` or `ssl`, or drop the login.

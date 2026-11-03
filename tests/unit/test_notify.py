@@ -108,6 +108,20 @@ def test_email_login_with_password_file(smtp, tmp_path):
     assert ("login", "aptw", "s3cret") in smtp.instances[0].calls
 
 
+def test_email_login_needs_tls(smtp, tmp_path, make_config):
+    from aptwarden.config import ConfigError
+
+    (tmp_path / "smtp-pw").write_text("s3cret\n")
+    cfg = {**EMAIL, "security": "none", "username": "aptw", "password_file": "smtp-pw"}
+    with pytest.raises(NotifyError, match="without TLS"):
+        EmailNotifier(cfg, tmp_path).send(Message("test", "s", "b"))
+    assert not any(c[0] == "login" for c in smtp.instances[0].calls)
+    assert not smtp.instances[0].sent
+    with pytest.raises(ConfigError, match="username needs security starttls or ssl"):
+        make_config(notify={"email": {"security": "none", "username": "aptw"}})
+    make_config(notify={"email": {"security": "none"}})  # without login it is allowed
+
+
 def test_email_greylisting_is_reported_as_temporary(smtp):
     smtp.refuse = {"admin@example.org": (450, b"4.7.1 Service is unavailable (try later)")}
     with pytest.raises(NotifyError, match=r"450 4\.7\.1 .*temporary"):

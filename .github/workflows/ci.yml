@@ -20,12 +20,18 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: ruff check src tests tools
       - run: pytest -q
+      - name: ShellCheck (the generated helper installer)
+        if: matrix.python == '3.13'
+        shell: bash  # with pipefail, unlike the default
+        run: aptwarden helper show --install | shellcheck -s sh -  # preinstalled on the runner
 
   debian-packages:
     # Runs with Debian's own packages only, the way the central host is set up.
@@ -36,6 +42,8 @@ jobs:
     container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - run: |
           apt-get update
           apt-get install -y --no-install-recommends python3 python3-yaml \
@@ -43,20 +51,27 @@ jobs:
       - run: python3 -m pytest -q
 
   security:
-    # Static analysis of aptwarden's code and known vulnerabilities in its
-    # dependencies. The security regression tests (size limits, ssh options,
-    # healthcheck redirects, ...) run with the unit tests above.
+    # Static analysis of aptwarden's code, its shell scripts and this workflow, and known
+    # vulnerabilities in its dependencies. The security regression tests (size limits,
+    # ssh options, healthcheck redirects, ...) run with the unit tests above.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.13"
-      - run: pip install bandit pip-audit
+      - name: install the tools (pinned with hashes)
+        run: pip install --require-hashes -r .github/requirements-ci.txt
       - name: bandit
         run: bandit -c pyproject.toml -r src
       - name: pip-audit
         run: pip-audit --progress-spinner off .
+      - name: zizmor (this workflow)
+        run: zizmor --offline .github/workflows
+      - name: ShellCheck (root helper)
+        run: shellcheck -s sh src/aptwarden/helper/aptwarden-helper  # preinstalled on the runner
       - name: SBOM (releases)
         if: startsWith(github.ref, 'refs/tags/v')
         run: pip-audit --progress-spinner off -f cyclonedx-json -o aptwarden-sbom.cdx.json .
@@ -65,3 +80,30 @@ jobs:
         with:
           name: sbom
           path: aptwarden-sbom.cdx.json
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # upload the results to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+        with:
+          languages: python, actions
+          queries: security-extended
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # scan the whole history
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+        env:
+          # read access to the pull request's commits; no license needed for personal accounts
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

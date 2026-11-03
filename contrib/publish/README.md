@@ -5,9 +5,11 @@ it never runs a web server. This directory contains the pieces to publish the pa
 server (e.g. your reverse proxy):
 
 - The **central host pushes** the page and `status.json` whenever they change, using a
-  dedicated SSH key. The key is restricted on the web server to writing into one
-  directory, so a compromised central host can only overwrite these files. The web server gets no access
-  to the central host.
+  dedicated SSH key. The key is restricted on the web server to writing (`rrsync -wo`)
+  into one directory. A compromised central host can put any file into that directory,
+  which nginx then serves under `/aptwarden/` (scripts are blocked by the page's CSP),
+  but cannot read anything or write elsewhere. The web server gets no access to the
+  central host.
 - **nginx** serves it to the LAN only, and only with a password.
 
 ## 1. Central host
@@ -25,7 +27,7 @@ systemctl daemon-reload
 ## 2. Web server
 
 ```sh
-apt install rsync python3                       # rrsync ships with rsync
+apt install rsync python3 apache2-utils         # rrsync ships with rsync; htpasswd
 useradd --system --create-home --shell /bin/sh aptwarden-publish
 install -d -m 755 -o aptwarden-publish -g aptwarden-publish /var/www/aptwarden
 install -d -m 700 -o aptwarden-publish -g aptwarden-publish ~aptwarden-publish/.ssh
@@ -35,20 +37,27 @@ echo 'restrict,from="CENTRAL_IP",command="/usr/bin/rrsync -wo /var/www/aptwarden
 chown aptwarden-publish: ~aptwarden-publish/.ssh/authorized_keys
 chmod 600 ~aptwarden-publish/.ssh/authorized_keys
 
-# password file (prompts for the password)
-printf 'admin:%s\n' "$(openssl passwd -apr1)" > /etc/nginx/aptwarden.htpasswd
+# password file with a bcrypt hash (prompts for the password); nginx checks it with
+# the system's crypt(3), which supports bcrypt on Debian 12 and later
+htpasswd -B -c /etc/nginx/aptwarden.htpasswd admin
 chown root:www-data /etc/nginx/aptwarden.htpasswd
 chmod 640 /etc/nginx/aptwarden.htpasswd
 ```
 
 Add `nginx-aptwarden.conf` to the server block of an HTTPS vhost and adjust the
-`allow` line, then `nginx -t && systemctl reload nginx`.
+`allow` line and the HSTS header (it must repeat the server block's, see the comment
+there), then `nginx -t && systemctl reload nginx`.
 
 ## 3. Connect and enable (central host)
 
 ```sh
-# record the web server's host key after checking its fingerprint
-ssh-keyscan -t ed25519 proxy.example.org >> /var/lib/aptwarden/known_hosts
+# fetch the web server's host key and show its fingerprint
+key=$(ssh-keyscan -t ed25519 proxy.example.org 2>/dev/null)
+printf '%s\n' "$key" | ssh-keygen -lf -
+# compare with the fingerprint on the web server itself:
+#   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# only if both match, record the key
+printf '%s\n' "$key" >> /var/lib/aptwarden/known_hosts
 runuser -u aptwarden -- aptwarden report             # writes the page the first time
 systemctl start aptwarden-status-publish.service     # first copy, check for errors
 systemctl enable --now aptwarden-status-publish.path

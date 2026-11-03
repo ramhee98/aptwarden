@@ -27,7 +27,7 @@ as a safety net.
 | **Proxmox API** | snapshots and rollbacks of the pool's guests | The certificate fingerprint is pinned. The token is limited to one pool and four privileges, see [Minimum privileges](#minimum-privileges). |
 | **Data sources** (Debian tracker, OSV, NVD, CISA KEV) | vulnerability data | Bad data causes wrong reports and wrong patch selection, but cannot run code. Responses are limited in size (256 MiB received and 256 MiB decompressed, read in blocks), and only `http(s)` URLs are used. Only fixed versions from the host's own apt sources are ever installed. |
 | **Definitions repository** | overriding source data (`not-affected`, `block`, `auto-patch`) | Only tags signed by a key in `allowed_signers` are accepted, never older than the accepted commit. The archive is read with limits: 32 MiB, 5000 entries, 256 KiB per file, 16 MiB in total. No symlinks, no YAML aliases. A stolen signing key can hide vulnerabilities or block fixes, so keep it offline. |
-| **Status page web server** | serving two files | It receives `index.html` and `status.json` through `rrsync -wo` and has no access to the central host. The page lists open vulnerabilities, so serve it LAN-only with a password. |
+| **Status page web server** | serving the status page | The central host pushes `index.html` and `status.json` with a key that `rrsync -wo` limits to writing into one directory. A compromised central host can therefore put any file there, served under `/aptwarden/` with a CSP that blocks scripts, but cannot read or write anything else. The web server has no access to the central host. The page lists open vulnerabilities, so serve it LAN-only with a password. |
 
 **Out of scope:** an attacker who is already root on the central host, a malicious
 Debian mirror (apt's signature checks apply) and denial of service by the configured
@@ -120,20 +120,27 @@ Safe defaults and the settings that weaken them:
 | `health.allowed_networks` | `[]` (no restriction) | set it to restrict checks from the central host |
 | `sources.custom.ref` | `signed-tags` | `branch`: no signature check (forks and testing only) |
 | `proxmox` TLS | certificate checked against the system CAs, `ca_file` or the pinned `tls_fingerprint` | cannot be turned off |
-| `notify.email.security`, `tls_verify` | `starttls`, `true` | `none`, `false` |
+| `notify.email.security`, `tls_verify` | `starttls`, `true` | `none` (refused with a `username`: no password without TLS), `false` |
 | `status_page.mode` | `0640` | `0644` |
 
 ## Security checks in CI
 
-The CI workflow runs three kinds of checks:
+The CI workflow runs these checks:
 - **Unit tests,** including the security regression tests: size limits for HTTP and
   definitions archives, YAML aliases, protected ssh options, ssh quoting, healthcheck
-  redirects and allowed networks.
-- **[bandit](https://bandit.readthedocs.io/)** on the code.
+  redirects and allowed networks, the root helper against a fake apt-get, and
+  OpenPGP-signed definition tags.
+- **[bandit](https://bandit.readthedocs.io/)** and
+  **[CodeQL](https://codeql.github.com/)** (`security-extended`) on the code.
 - **[pip-audit](https://pypi.org/project/pip-audit/)** on the dependencies, on every
   push and weekly.
+- **[ShellCheck](https://www.shellcheck.net/)** on the root helper and the generated
+  installer.
+- **[zizmor](https://docs.zizmor.sh/)** on the workflow itself, and
+  **[gitleaks](https://github.com/gitleaks/gitleaks)** on the whole git history.
 
-Release tags get a CycloneDX SBOM. Actions are pinned to commit SHAs, and Dependabot
-keeps them current. It proposes a new version only once it is 7 days old, by when
+Release tags get a CycloneDX SBOM. Actions are pinned to commit SHAs, and checkouts
+keep no credentials. bandit, pip-audit and zizmor are installed from
+`.github/requirements-ci.txt`, pinned with hashes. Dependabot keeps both current. It proposes a new version only once it is 7 days old, by when
 compromised or broken releases are usually found and pulled; security updates come
 right away.

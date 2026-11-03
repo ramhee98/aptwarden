@@ -38,4 +38,12 @@ LockPersonality=yes
 CapabilityBoundingSet=
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectProc=invisible
+ProcSubset=pid
+PrivateIPC=yes
+RemoveIPC=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+# fail the call instead of killing the process, so a missing call shows up as an error
+SystemCallErrorNumber=EPERM
 UMask=0077

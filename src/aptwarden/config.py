@@ -316,6 +316,10 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
     for section in (merged["sources"], merged["enrich"], merged["notify"], merged["health"],
                     merged["snapshots"]):
         _check_durations(section)
+    email = merged["notify"]["email"]
+    if email.get("username") and email.get("security") == "none":
+        raise ConfigError("notify.email: username needs security starttls or ssl, the SMTP "
+                          "password is never sent unencrypted")
 
     hosts: list[HostConfig] = []
     seen: set[str] = set()

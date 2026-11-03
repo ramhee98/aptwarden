@@ -694,7 +694,8 @@ contains a complete setup:
 - **Push on change:** a systemd path unit on the central host pushes the page whenever
   it changes, over SSH with a dedicated key.
 - **Restricted key:** on the web server, `rrsync -wo` limits the key to writing into
-  one directory. The web server gets no access to the central host.
+  one directory (any file in it, not only the two). The web server gets no access to
+  the central host.
 - **nginx location:** `satisfy all` with an IP allowlist, Basic Auth and the same CSP
   as the page.
 
@@ -896,10 +897,12 @@ git -c gpg.format=ssh -c user.signingkey=~/.ssh/release_ed25519.pub tag -s -m v0
 git push origin v0.3.0
 ```
 
-CI also runs [bandit](https://bandit.readthedocs.io/) on `src` and
-[pip-audit](https://pypi.org/project/pip-audit/) on the dependencies, on every push and
-weekly. For release tags it attaches a CycloneDX SBOM (`sbom` artifact). Dependabot
-keeps the pinned action SHAs current, proposing a new version only once it is a week
+CI also runs [bandit](https://bandit.readthedocs.io/) and CodeQL on `src`,
+[pip-audit](https://pypi.org/project/pip-audit/) on the dependencies (on every push and
+weekly), ShellCheck on the root helper, zizmor on the workflow and gitleaks on the
+history; see [SECURITY.md](SECURITY.md#security-checks-in-ci). For release tags it
+attaches a CycloneDX SBOM (`sbom` artifact). Dependabot keeps the pinned action SHAs
+and the hash-pinned CI tools current, proposing a new version only once it is a week
 old (security updates right away).
 
 ## Security

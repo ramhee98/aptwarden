@@ -10,6 +10,13 @@ updates:
     # delayed.
     cooldown:
       default-days: 7
+  # bandit, pip-audit and zizmor for CI, pinned with hashes
+  - package-ecosystem: pip
+    directory: /.github
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
   # PyYAML and jsonschema; the central host uses Debian's packages, so these
   # updates mainly show when the supported versions should be re-checked
   - package-ecosystem: pip
