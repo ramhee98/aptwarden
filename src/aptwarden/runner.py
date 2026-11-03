@@ -419,7 +419,9 @@ class Runner:
 
 
 class _PatchLock:
-    """Only one patch run at a time (the timer and a manual run must not overlap)."""
+    """Only one patch run at a time (the timer and a manual run must not overlap). Manual
+    rollbacks and snapshot cleanups take it too, so they never touch a host or snapshot a
+    patch run is working on."""
 
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)

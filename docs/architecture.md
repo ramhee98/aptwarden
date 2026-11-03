@@ -173,7 +173,9 @@ they only send mail when something happened or an abort has a new reason.
 alert, because apt downgrades are not a reliable rollback.
 
 A patch lock (`flock` on `state_dir/patch.lock`) keeps the timer and a manual run from
-overlapping.
+overlapping. `aptwarden rollback` and `aptwarden snapshots cleanup` (except with
+`--dry-run`) take the same lock and fail while a patch run holds it, so they never roll
+back or delete a snapshot a running patch depends on.
 
 ### Target host privileges
 

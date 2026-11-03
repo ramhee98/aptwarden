@@ -133,6 +133,34 @@ def test_patch_lock(tmp_path):
     _PatchLock(tmp_path / "patch.lock").release()
 
 
+def test_rollback_and_cleanup_refuse_during_a_patch_run(make_config, capsys, monkeypatch):
+    from types import SimpleNamespace
+
+    from aptwarden import cli
+
+    cfg = cfg_with(make_config)
+    rollback = SimpleNamespace(host="web01", snapshot=None, yes=True)
+    cleanup = SimpleNamespace(host=None, dry_run=False)
+    providers = []
+    monkeypatch.setattr(Runner, "provider", lambda self, host: providers.append(host))
+    lock = _PatchLock(cfg.state_dir / "patch.lock")
+    try:
+        assert cli.cmd_rollback(rollback, cfg) == cli.EXIT_PROBLEM
+        assert cli.cmd_snapshots_cleanup(cleanup, cfg) == cli.EXIT_PROBLEM
+        err = capsys.readouterr().err
+        assert err.count("another patch run is active, try again when it has finished") == 2
+        assert providers == []  # nothing was touched
+        # a dry run only reads
+        assert cli.cmd_snapshots_cleanup(SimpleNamespace(host=None, dry_run=True), cfg) == 0
+    finally:
+        lock.release()
+    # without a patch run both go ahead, and release the lock again
+    assert cli.cmd_rollback(rollback, cfg) == cli.EXIT_PROBLEM
+    assert "no active aptwarden snapshot for web01" in capsys.readouterr().err
+    assert cli.cmd_snapshots_cleanup(cleanup, cfg) == 0
+    _PatchLock(cfg.state_dir / "patch.lock").release()
+
+
 def test_snapshot_cleanup(make_config):
     cfg = cfg_with(make_config)
     h = openssl_host()

@@ -39,6 +39,8 @@ commits.
   rewrite the terminal or fake log lines.
 - Only well-formed CVE ids (`CVE-YYYY-NNNN…`) are looked up at OSV and NVD, and every
   id that goes into a request URL is URL-encoded.
+- `aptwarden rollback` and `aptwarden snapshots cleanup` take the patch lock and fail
+  while a patch run is active.
 
 ### Upgrade notes
 

@@ -469,6 +469,17 @@ def cmd_patch(args, cfg: config.Config) -> int:
     return EXIT_OK if run.status == "ok" else EXIT_PROBLEM
 
 
+def _patch_lock(cfg: config.Config):
+    """The lock of patch runs, or None after an error message if a patch run holds it."""
+    from aptwarden.runner import _PatchLock
+
+    try:
+        return _PatchLock(cfg.state_dir / "patch.lock")
+    except RuntimeError as e:
+        print(f"aptwarden: {e}, try again when it has finished", file=sys.stderr)
+        return None
+
+
 def cmd_rollback(args, cfg: config.Config) -> int:
     from aptwarden.patch.runner import PatchRunner
     from aptwarden.runner import Runner, new_run_id
@@ -476,6 +487,9 @@ def cmd_rollback(args, cfg: config.Config) -> int:
     from aptwarden.transport import TransportFactory
 
     [host] = cfg.select_hosts([args.host])
+    lock = _patch_lock(cfg)
+    if lock is None:
+        return EXIT_PROBLEM
     runner = Runner(cfg, offline=True)
     factory = TransportFactory()
     try:
@@ -502,6 +516,7 @@ def cmd_rollback(args, cfg: config.Config) -> int:
     finally:
         factory.cleanup()
         runner.close()
+        lock.release()
     print(f"{host.name}: {result.status} ({result.reason})")
     for x in result.health_after:
         print(f"  health: {x}")
@@ -527,11 +542,17 @@ def cmd_snapshots_list(args, cfg: config.Config) -> int:
 def cmd_snapshots_cleanup(args, cfg: config.Config) -> int:
     from aptwarden.runner import Runner
 
+    hosts = cfg.select_hosts(args.host)
+    lock = None
+    if not args.dry_run and (lock := _patch_lock(cfg)) is None:
+        return EXIT_PROBLEM
     runner = Runner(cfg, offline=True)
     try:
-        notes = runner.cleanup_snapshots(cfg.select_hosts(args.host), dry_run=args.dry_run)
+        notes = runner.cleanup_snapshots(hosts, dry_run=args.dry_run)
     finally:
         runner.close()
+        if lock:
+            lock.release()
     print("\n".join(notes) if notes else "nothing to clean up")
     return EXIT_OK
 
