@@ -9,7 +9,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from aptwarden.config import HostConfig, SshSettings
+from aptwarden.config import HostConfig, SshSettings, check_ssh_options
 
 # Commands run with a fixed locale so their output is parseable.
 _ENV_PREFIX = ["env", "LC_ALL=C.UTF-8"]
@@ -101,7 +101,10 @@ class SshTransport(Transport):
         if s.identity_file:
             opts["IdentityFile"] = s.identity_file
             opts["IdentitiesOnly"] = "yes"
-        opts.update({k: str(v) for k, v in s.options.items()})
+        try:  # validated at config load; checked again for settings built elsewhere
+            opts.update(check_ssh_options(s.options))
+        except ValueError as e:
+            raise TransportError(str(e)) from None
         argv = ["ssh"]
         for k, v in opts.items():
             argv += ["-o", f"{k}={v}"]

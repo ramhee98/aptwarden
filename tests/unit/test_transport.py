@@ -2,7 +2,7 @@ import shlex
 
 import pytest
 
-from aptwarden.config import SshSettings
+from aptwarden.config import ConfigError, SshSettings
 from aptwarden.transport import LocalTransport, SshTransport, TransportError
 
 
@@ -134,3 +134,54 @@ def test_helper_install_script_with_needrestart(capsys):
         assert "apt_install sudo" in script and "apt-get update" in script
         assert subprocess.run(["sh", "-n"], input=script, text=True).returncode == 0
     assert cli.main(["helper", "show", "--with-needrestart"]) == 2
+
+
+# --- protected ssh options (SEC-03) ------------------------------------------
+
+PROTECTED = ["BatchMode", "ConnectTimeout", "ControlMaster", "ControlPath", "ControlPersist",
+             "StrictHostKeyChecking", "UserKnownHostsFile", "GlobalKnownHostsFile",
+             "IdentityFile", "IdentitiesOnly", "IdentityAgent", "ProxyCommand",
+             "LocalCommand", "PermitLocalCommand", "KnownHostsCommand", "RemoteCommand",
+             "ForwardAgent", "ForwardX11", "LocalForward", "RemoteForward", "DynamicForward",
+             "SendEnv", "SetEnv", "CheckHostIP", "VerifyHostKeyDNS", "UpdateHostKeys",
+             "PasswordAuthentication", "Port", "User", "Hostname", "Include", "Match"]
+
+
+@pytest.mark.parametrize("option", PROTECTED + ["stricthostkeychecking", "PROXYCOMMAND"])
+def test_protected_options_are_refused_at_config_load(make_config, option):
+    with pytest.raises(ConfigError, match=f"host web01: ssh.options: {option} is not allowed"):
+        make_config(ssh={"options": {option: "no"}})
+
+
+@pytest.mark.parametrize("value", ["bastion -oProxyCommand=sh", "a\nProxyCommand=sh",
+                                   "a\tb", "", "x;y", "$(id)", "`id`", "a'b", 'a"b'])
+def test_option_values_must_be_one_token(make_config, value):
+    with pytest.raises(ConfigError, match="invalid value for ProxyJump"):
+        make_config(ssh={"options": {"ProxyJump": value}})
+
+
+def test_allowed_options_keep_canonical_names(make_config):
+    cfg = make_config(hosts=[{"name": "web01", "ssh": {"options": {
+        "proxyjump": "admin@[2001:db8::1]:2222,bastion2", "ServerAliveInterval": 30,
+        "HostKeyAlgorithms": "+ssh-ed25519", "CertificateFile": "~/.ssh/id-cert.pub"}}}])
+    assert cfg.hosts[0].ssh.options == {
+        "ProxyJump": "admin@[2001:db8::1]:2222,bastion2", "ServerAliveInterval": "30",
+        "HostKeyAlgorithms": "+ssh-ed25519", "CertificateFile": "~/.ssh/id-cert.pub"}
+    with pytest.raises(ConfigError, match="ProxyJump is set twice"):
+        make_config(ssh={"options": {"ProxyJump": "a", "proxyjump": "b"}})
+
+
+def test_managed_options_cannot_be_overridden_at_runtime():
+    # settings built without the config loader are checked again
+    for option in ("StrictHostKeyChecking", "UserKnownHostsFile", "ProxyCommand"):
+        t = SshTransport("web01", "192.0.2.10", settings(options={option: "no"}), "/run/aptw")
+        with pytest.raises(TransportError, match=f"{option} is not allowed"):
+            t.base_argv()
+    # allowed overrides of aptwarden's own defaults replace them, never add a second value
+    t = SshTransport("web01", "192.0.2.10", settings(options={"ServerAliveInterval": "30"}),
+                     "/run/aptw")
+    argv = t.base_argv()
+    assert argv.count("ServerAliveInterval=30") == 1
+    assert not any(a.startswith("ServerAliveInterval=15") for a in argv)
+    opts = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-o")
+    assert opts["StrictHostKeyChecking"] == "yes" and opts["BatchMode"] == "yes"

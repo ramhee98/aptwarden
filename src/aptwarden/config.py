@@ -147,6 +147,41 @@ def read_secret(path: str, base: Path | None = None) -> str:
         raise ConfigError(f"cannot read secret {path}: {e.strerror}") from e
 
 
+# ssh.options may only set these (ssh option names are case-insensitive).
+# Everything aptwarden sets itself (BatchMode, StrictHostKeyChecking,
+# UserKnownHostsFile, IdentityFile, ControlPath, ...) and anything that runs
+# commands, forwards or weakens host key checks (ProxyCommand, LocalCommand,
+# KnownHostsCommand, ForwardAgent, GlobalKnownHostsFile, CheckHostIP, ...)
+# is refused, so extra options cannot silently weaken the defaults.
+SSH_OPTIONS_ALLOWED = {name.lower(): name for name in (
+    "AddressFamily", "BindAddress", "BindInterface", "CertificateFile", "Ciphers",
+    "Compression", "ConnectionAttempts", "HostKeyAlgorithms", "HostKeyAlias", "IPQoS",
+    "KexAlgorithms", "LogLevel", "MACs", "ProxyJump", "PubkeyAcceptedAlgorithms",
+    "RekeyLimit", "ServerAliveCountMax", "ServerAliveInterval", "TCPKeepAlive",
+)}
+# One token, no whitespace or control characters: nothing that could end the
+# -o value early or smuggle in a second configuration line.
+_SSH_OPTION_VALUE = re.compile(r"^[A-Za-z0-9@%+=:,./_~\-\[\]^]+$")
+
+
+def check_ssh_options(options: dict) -> dict[str, str]:
+    """Validated ssh.options with canonical names; ValueError explains a refusal."""
+    checked: dict[str, str] = {}
+    for key, value in options.items():
+        name = SSH_OPTIONS_ALLOWED.get(str(key).lower())
+        if name is None:
+            raise ValueError(f"ssh.options: {key} is not allowed (allowed: "
+                             f"{', '.join(sorted(SSH_OPTIONS_ALLOWED.values()))}); aptwarden "
+                             f"manages host key checking, identities and multiplexing itself")
+        if name in checked:
+            raise ValueError(f"ssh.options: {name} is set twice")
+        text = str(value)
+        if not _SSH_OPTION_VALUE.match(text):
+            raise ValueError(f"ssh.options: invalid value for {name}: {text!r}")
+        checked[name] = text
+    return checked
+
+
 @dataclass
 class SshSettings:
     user: str
@@ -289,6 +324,10 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
         ssh = deep_merge(merged["ssh"], h.get("ssh", {}))
         ssh["identity_file"] = _resolve(ssh["identity_file"], base)
         ssh["known_hosts_file"] = _resolve(ssh["known_hosts_file"], base)
+        try:
+            ssh["options"] = check_ssh_options(ssh["options"])
+        except ValueError as e:
+            raise ConfigError(f"host {h['name']}: {e}") from None
         policy = deep_merge(merged["policy"], h.get("policy", {}))
         for w in policy["window"]:
             try:
