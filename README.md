@@ -897,6 +897,12 @@ CI also runs [bandit](https://bandit.readthedocs.io/) on `src` and
 weekly. For release tags it attaches a CycloneDX SBOM (`sbom` artifact). Dependabot
 keeps the pinned action SHAs current.
 
+## Security
+
+[SECURITY.md](SECURITY.md) covers how to report a vulnerability, the threat model, the
+minimum privileges for SSH and Proxmox, the residual risks of snapshots and rollbacks,
+and the safe defaults with the settings that weaken them.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
