@@ -1,4 +1,5 @@
 import shlex
+import subprocess
 
 import pytest
 
@@ -185,3 +186,30 @@ def test_managed_options_cannot_be_overridden_at_runtime():
     assert not any(a.startswith("ServerAliveInterval=15") for a in argv)
     opts = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-o")
     assert opts["StrictHostKeyChecking"] == "yes" and opts["BatchMode"] == "yes"
+
+
+# Arguments a remote shell would expand, split or execute; each must arrive as is.
+TRICKY_ARGS = ["a b", "--", "-n", "$HOME", "`id`", "$(id)", "; id", "x|y", "a&&b", "'q'",
+               '"d"', "*", "~", "\\n", "", "\u00e4 \u00fc", "a\nb", "-oProxyCommand=sh"]
+
+
+def test_remote_command_survives_a_real_shell(monkeypatch):
+    """What sshd hands to the login shell is the single command argument; run it
+    through sh -c here, as the remote side does (SEC-04)."""
+    captured = {}
+
+    class P:
+        returncode, stdout, stderr = 0, "", ""
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return P()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    SshTransport("web01", "192.0.2.10", settings(), "/run/aptw").run(
+        ["printf", "[%s]\\n", *TRICKY_ARGS])
+    cmd = captured["cmd"]
+    assert cmd[-3:-1] == ["192.0.2.10", "--"]  # the command is one argument after "--"
+    monkeypatch.undo()
+    out = subprocess.run(["sh", "-c", cmd[-1]], capture_output=True, text=True, check=True)
+    assert out.stdout == "".join(f"[{a}]\n" for a in TRICKY_ARGS)

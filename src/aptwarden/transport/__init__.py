@@ -111,8 +111,12 @@ class SshTransport(Transport):
         return argv + list(extra) + ["-p", str(s.port), "-l", s.user, self.address]
 
     def run(self, argv: list[str], timeout: float | None = None) -> CommandResult:
+        # ssh -o ... -p PORT -l USER ADDRESS -- 'env LC_ALL=C.UTF-8 cmd arg ...'
         # ssh joins its arguments into one string for the remote shell, so the
-        # command must be quoted as a whole.
+        # command is quoted as a whole and passed as a single argument. OpenSSH
+        # also parses options after the destination; "--" ends that, so no
+        # argument can become an ssh option, and ssh does not send the "--"
+        # itself (checked with OpenSSH 10.0: "Sending command: env ...").
         cmd = self.base_argv() + ["--", shlex.join(_ENV_PREFIX + argv)]
         try:
             p = subprocess.run(

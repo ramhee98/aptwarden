@@ -13,6 +13,7 @@ import pytest
 from aptwarden import config, debversion, inventory
 from aptwarden.runner import Runner
 from aptwarden.transport import SshTransport, TransportError, TransportFactory
+from tests.unit.test_transport import TRICKY_ARGS
 
 pytestmark = pytest.mark.integration
 
@@ -47,6 +48,15 @@ def test_inventory_over_ssh(target, factory):
         debversion.parse(p.version)
         debversion.parse(p.source_version)
     assert inv.facts["kernel"]
+
+
+@pytest.mark.parametrize("target", HOSTS[:1])
+def test_arguments_arrive_unchanged(target, factory):
+    """The remote command is one shell-quoted argument after "--" (SEC-04):
+    OpenSSH ends option parsing there and does not send the "--" itself."""
+    with factory.create(host_config(target)) as transport:
+        r = transport.run(["printf", "[%s]\\n", *TRICKY_ARGS]).check()
+    assert r.stdout == "".join(f"[{a}]\n" for a in TRICKY_ARGS)
 
 
 @pytest.mark.parametrize("target", HOSTS[:1])
