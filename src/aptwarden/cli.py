@@ -470,7 +470,7 @@ def cmd_patch(args, cfg: config.Config) -> int:
 
 
 def _patch_lock(cfg: config.Config):
-    """The lock of patch runs, or None after an error message if a patch run holds it."""
+    """The lock of patch runs, or None after an error message if someone else holds it."""
     from aptwarden.runner import _PatchLock
 
     try:
@@ -487,25 +487,35 @@ def cmd_rollback(args, cfg: config.Config) -> int:
     from aptwarden.transport import TransportFactory
 
     [host] = cfg.select_hosts([args.host])
-    lock = _patch_lock(cfg)
-    if lock is None:
-        return EXIT_PROBLEM
     runner = Runner(cfg, offline=True)
     factory = TransportFactory()
-    try:
+    lock = None
+
+    def snapshot():
         snaps = runner.state.snapshots(host.name, ("active", "rolled-back"))
         if args.snapshot:
             snaps = [s for s in snaps if s["name"] == args.snapshot]
-        if not snaps:
+        return snaps[0] if snaps else None
+
+    try:
+        snap = snapshot()
+        if snap is None:
             print(f"aptwarden: no active aptwarden snapshot for {host.name}"
                   + (f" named {args.snapshot}" if args.snapshot else ""), file=sys.stderr)
             return EXIT_PROBLEM
-        snap = snaps[0]
         if not args.yes:
             answer = input(f"Roll {host.name} back to {snap['name']} ({snap['created_at']})? "
                            "Everything written since then is lost. [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 return EXIT_USAGE
+        # Locked only after the question, so an unanswered prompt does not block patch runs.
+        # A patch run or cleanup in the meantime may have changed the snapshots.
+        if (lock := _patch_lock(cfg)) is None:
+            return EXIT_PROBLEM
+        if snapshot() != snap:
+            print(f"aptwarden: the snapshots of {host.name} changed in the meantime, "
+                  "run the rollback again", file=sys.stderr)
+            return EXIT_PROBLEM
         ref = SnapshotRef(snap["provider"], snap["target"], snap["name"])
         transport = factory.create(host)
         try:
@@ -516,7 +526,8 @@ def cmd_rollback(args, cfg: config.Config) -> int:
     finally:
         factory.cleanup()
         runner.close()
-        lock.release()
+        if lock:
+            lock.release()
     print(f"{host.name}: {result.status} ({result.reason})")
     for x in result.health_after:
         print(f"  health: {x}")

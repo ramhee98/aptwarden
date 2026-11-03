@@ -36,6 +36,8 @@ def test_defaults_and_host_inheritance(make_config, tmp_path):
         ({"hosts": [{"name": "a", "address": "-oProxyCommand=sh -c id"}]}, "does not match"),
         ({"hosts": [{"name": "a", "address": "-oProxyCommand=id"}]}, "does not match"),
         ({"hosts": [{"name": "a", "address": "web 01"}]}, "does not match"),
+        # "$" in the schema's pattern also matches before a final newline
+        ({"hosts": [{"name": "a", "address": "web01\n"}]}, "invalid address 'web01\\\\n'"),
         ({"hosts": [{"name": "a", "address": ""}]}, "does not match"),
     ],
 )

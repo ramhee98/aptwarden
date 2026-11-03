@@ -17,7 +17,7 @@ commits.
   `allow_new_packages`, the central host now passes the allowed extras explicitly.
   A refusal ends the patch run as `aborted` (nothing changed, no rollback).
 - **Host addresses can no longer start with `-` or contain whitespace.** The config
-  schema refuses them, and the SSH transport refuses them again before running `ssh`.
+  loader refuses them, and the SSH transport refuses them again before running `ssh`.
   An address like `-oProxyCommand=…` used to reach ssh's argument list as an option.
   It was not exploitable with OpenSSH 9.6 or later, which rejects such a host name,
   so this adds a layer of defence in depth.
@@ -38,7 +38,9 @@ commits.
 - Only well-formed CVE ids (`CVE-YYYY-NNNN…`) are looked up at OSV and NVD, and every
   id that goes into a request URL is URL-encoded.
 - `aptwarden rollback` and `aptwarden snapshots cleanup` take the patch lock and fail
-  while a patch run is active.
+  while a patch run is active. `rollback` asks its question before taking the lock, so
+  an unanswered prompt does not block patch runs, and stops if the snapshots changed in
+  the meantime.
 - `notify.email` with a `username` and `security: none` is refused at config load and
   before login, so the SMTP password is never sent without TLS.
 - The systemd units add `SystemCallFilter=@system-service`, `ProtectProc=invisible`,

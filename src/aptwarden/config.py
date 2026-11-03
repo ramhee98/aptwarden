@@ -184,6 +184,13 @@ def check_ssh_options(options: dict) -> dict[str, str]:
     return checked
 
 
+def valid_address(address: str) -> bool:
+    """An ssh destination that ssh cannot parse as an option: not empty, no leading "-",
+    no whitespace. The schema's pattern alone lets a trailing newline through."""
+    return bool(address) and not address.startswith("-") and not any(
+        c.isspace() for c in address)
+
+
 @dataclass
 class SshSettings:
     user: str
@@ -334,6 +341,9 @@ def from_dict(data: dict, path: Path | None = None) -> Config:
             ssh["options"] = check_ssh_options(ssh["options"])
         except ValueError as e:
             raise ConfigError(f"host {h['name']}: {e}") from None
+        if not valid_address(h.get("address", h["name"])):
+            raise ConfigError(f"host {h['name']}: invalid address "
+                              f"{h.get('address', h['name'])!r}")
         policy = deep_merge(merged["policy"], h.get("policy", {}))
         for w in policy["window"]:
             try:

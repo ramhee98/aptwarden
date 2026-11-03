@@ -21,10 +21,11 @@ DPKG_FORMAT = (
 # and "config files only" (c) means code from the package is on disk.
 _INSTALLED_STATES = frozenset("iUFWtH")
 
-# What dpkg itself accepts. Anything else (e.g. control characters) comes from a host that
-# lies about its packages and would end up in terminals, logs and mails.
-_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?")
-_SOURCE = re.compile(r"([a-z0-9][a-z0-9+.-]*)?")
+# What dpkg itself accepts (it still allows the deprecated "_" in names, and lowercases
+# them). Anything else (e.g. control characters) comes from a host that lies about its
+# packages and would end up in terminals, logs and mails.
+_NAME = re.compile(r"[a-z0-9][a-z0-9+._-]*(:[a-z0-9-]+)?")
+_SOURCE = re.compile(r"([a-z0-9][a-z0-9+._-]*)?")
 _VERSION = re.compile(r"[A-Za-z0-9.+~:-]+")
 _ARCH = re.compile(r"[a-z0-9-]+")
 _STATUS = re.compile(r"[a-zA-Z ]{2,3}")

@@ -139,26 +139,59 @@ def test_rollback_and_cleanup_refuse_during_a_patch_run(make_config, capsys, mon
     from aptwarden import cli
 
     cfg = cfg_with(make_config)
+    runner = Runner(cfg)
+    runner.state.add_snapshot("fake", "node/lxc/100", "aptw_r", "web01", "r")
+    runner.close()
     rollback = SimpleNamespace(host="web01", snapshot=None, yes=True)
     cleanup = SimpleNamespace(host=None, dry_run=False)
     providers = []
-    monkeypatch.setattr(Runner, "provider", lambda self, host: providers.append(host))
+    monkeypatch.setattr(Runner, "provider",
+                        lambda self, host: providers.append(host) or FakeProvider(openssl_host()))
     lock = _PatchLock(cfg.state_dir / "patch.lock")
     try:
         assert cli.cmd_rollback(rollback, cfg) == cli.EXIT_PROBLEM
         assert cli.cmd_snapshots_cleanup(cleanup, cfg) == cli.EXIT_PROBLEM
         err = capsys.readouterr().err
-        assert err.count("another patch run is active, try again when it has finished") == 2
+        assert err.count("the patch lock is held by another patch run, rollback or snapshot "
+                         "cleanup, try again when it has finished") == 2
         assert providers == []  # nothing was touched
         # a dry run only reads
         assert cli.cmd_snapshots_cleanup(SimpleNamespace(host=None, dry_run=True), cfg) == 0
     finally:
         lock.release()
     # without a patch run both go ahead, and release the lock again
-    assert cli.cmd_rollback(rollback, cfg) == cli.EXIT_PROBLEM
-    assert "no active aptwarden snapshot for web01" in capsys.readouterr().err
+    assert cli.cmd_rollback(SimpleNamespace(host="web01", snapshot="other", yes=True),
+                            cfg) == cli.EXIT_PROBLEM
+    assert "no active aptwarden snapshot for web01 named other" in capsys.readouterr().err
     assert cli.cmd_snapshots_cleanup(cleanup, cfg) == 0
     _PatchLock(cfg.state_dir / "patch.lock").release()
+
+
+def test_rollback_asks_before_taking_the_patch_lock(make_config, capsys, monkeypatch):
+    from types import SimpleNamespace
+
+    from aptwarden import cli
+
+    cfg = cfg_with(make_config)
+    runner = Runner(cfg)
+    runner.state.add_snapshot("fake", "node/lxc/100", "aptw_r", "web01", "r")
+    providers = []
+    monkeypatch.setattr(Runner, "provider", lambda self, host: providers.append(host))
+
+    def answer(prompt):
+        # an open question holds no lock, so a patch run can start meanwhile ...
+        _PatchLock(cfg.state_dir / "patch.lock").release()
+        # ... and e.g. replace the snapshot
+        runner.state.set_snapshot_state("fake", "node/lxc/100", "aptw_r", "deleted")
+        return "y"
+
+    monkeypatch.setattr("builtins.input", answer)
+    args = SimpleNamespace(host="web01", snapshot=None, yes=False)
+    assert cli.cmd_rollback(args, cfg) == cli.EXIT_PROBLEM
+    assert "snapshots of web01 changed in the meantime" in capsys.readouterr().err
+    assert providers == []
+    runner.close()
+    _PatchLock(cfg.state_dir / "patch.lock").release()  # released again
 
 
 def test_snapshot_cleanup(make_config):

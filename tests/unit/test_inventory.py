@@ -42,6 +42,12 @@ def test_parse_dpkg_rejects_invalid_package_data(line):
     assert "\x1b" not in str(e.value) and "\x9b" not in str(e.value)
 
 
+def test_parse_dpkg_accepts_deprecated_underscore():
+    # dpkg still accepts "_" in package names, e.g. in old third-party packages
+    [pkg] = parse_dpkg_query("vendor_tool\t1.0-1\tvendor_tool\t\tii \tamd64\n")
+    assert (pkg.name, pkg.source) == ("vendor_tool", "vendor_tool")
+
+
 def test_parse_dpkg_status_filter():
     text = (
         "a\t1\ta\t1\tii \tamd64\n"

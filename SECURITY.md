@@ -141,6 +141,6 @@ The CI workflow runs these checks:
 
 Release tags get a CycloneDX SBOM. Actions are pinned to commit SHAs, and checkouts
 keep no credentials. bandit, pip-audit and zizmor are installed from
-`.github/requirements-ci.txt`, pinned with hashes. Dependabot keeps both current. It proposes a new version only once it is 7 days old, by when
-compromised or broken releases are usually found and pulled; security updates come
-right away.
+`.github/requirements-ci.txt`, pinned with hashes. Dependabot keeps both current. It
+proposes a new version only once it is 7 days old, by when compromised or broken
+releases are usually found and pulled; security updates come right away.

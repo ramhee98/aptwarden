@@ -9,7 +9,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from aptwarden.config import HostConfig, SshSettings, check_ssh_options
+from aptwarden.config import HostConfig, SshSettings, check_ssh_options, valid_address
 from aptwarden.log import safe
 
 # Commands run with a fixed locale so their output is parseable.
@@ -111,9 +111,8 @@ class SshTransport(Transport):
         except ValueError as e:
             raise TransportError(str(e)) from None
         # The address is the last argument before "--", so ssh would parse "-o..." as an
-        # option. The schema refuses it too; this covers addresses from elsewhere.
-        if not self.address or self.address.startswith("-") or any(
-                c.isspace() for c in self.address):
+        # option. The config loader refuses it too; this covers addresses from elsewhere.
+        if not valid_address(self.address):
             raise TransportError(f"invalid ssh address {self.address!r}")
         argv = ["ssh"]
         for k, v in opts.items():

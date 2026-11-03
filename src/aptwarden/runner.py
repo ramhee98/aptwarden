@@ -430,7 +430,8 @@ class _PatchLock:
             fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             self.fh.close()
-            raise RuntimeError("another patch run is active") from None
+            raise RuntimeError("the patch lock is held by another patch run, rollback or "
+                               "snapshot cleanup") from None
 
     def release(self) -> None:
         fcntl.flock(self.fh, fcntl.LOCK_UN)
