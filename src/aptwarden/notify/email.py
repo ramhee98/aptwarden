@@ -87,7 +87,7 @@ class EmailNotifier(Notifier):
                     smtp.starttls(context=self._context())
                     smtp.ehlo()
                 if s.get("username"):
-                    password = read_secret(s["password_file"], self.base_dir) \
+                    password = read_secret(s.get("password_file"), self.base_dir) \
                         if s.get("password_file") else ""
                     smtp.login(s["username"], password)
                 refused = smtp.send_message(self.build(msg))

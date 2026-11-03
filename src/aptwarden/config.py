@@ -109,7 +109,6 @@ DEFAULTS: dict = {
             "tls_verify": True,
             "tls_server_name": None,
             "username": None,
-            "password_file": None,
             "timeout": 30,
         },
     },

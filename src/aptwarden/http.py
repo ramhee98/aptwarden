@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from dataclasses import dataclass, field
@@ -68,6 +69,9 @@ class HttpClient:
     ) -> Response:
         """Send a request. Every HTTP status is returned as a Response; only
         network failures (after retries) raise HttpError."""
+        if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+            # urllib would also open file:// and ftp:// URLs from the configuration
+            raise HttpError(url, "only http and https URLs are allowed")
         attempts = (self.retries if retries is None else retries) + 1
         hdrs = {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip", **(headers or {})}
         last_error = ""
@@ -76,7 +80,8 @@ class HttpClient:
                 time.sleep(self.backoff * attempt)
             req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                # the scheme is checked above (bandit B310)
+                with urllib.request.urlopen(req, timeout=self.timeout) as r:  # nosec B310
                     resp = self._response(url, r.status, r, r.headers)
             except urllib.error.HTTPError as e:
                 with e:

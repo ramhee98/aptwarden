@@ -3,7 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+  schedule:
+    - cron: "17 5 * * 1"  # weekly, for newly published vulnerabilities in dependencies
+
+# Actions are pinned to commit SHAs (tags can be moved); Dependabot updates them.
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -12,8 +19,8 @@ jobs:
       matrix:
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
@@ -28,9 +35,33 @@ jobs:
         image: ["debian:12", "debian:13"]
     container: ${{ matrix.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: |
           apt-get update
           apt-get install -y --no-install-recommends python3 python3-yaml \
             python3-jsonschema python3-pytest git openssh-client tzdata
       - run: python3 -m pytest -q
+
+  security:
+    # Static analysis of aptwarden's code and known vulnerabilities in its
+    # dependencies. The security regression tests (size limits, ssh options,
+    # healthcheck redirects, ...) run with the unit tests above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: pip install bandit pip-audit
+      - name: bandit
+        run: bandit -c pyproject.toml -r src
+      - name: pip-audit
+        run: pip-audit --progress-spinner off .
+      - name: SBOM (releases)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pip-audit --progress-spinner off -f cyclonedx-json -o aptwarden-sbom.cdx.json .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: sbom
+          path: aptwarden-sbom.cdx.json

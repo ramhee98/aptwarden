@@ -75,8 +75,10 @@ apt install python3 python3-venv python3-yaml python3-jsonschema python3-setupto
 useradd --system --home-dir /var/lib/aptwarden --shell /usr/sbin/nologin aptwarden
 
 python3 -m venv --system-site-packages /opt/aptwarden
+# a release tag, not the latest commit of main (see "Installing a verified release")
 # --no-build-isolation: build with Debian's setuptools, so PyPI is never contacted
-/opt/aptwarden/bin/pip install --no-deps --no-build-isolation git+https://github.com/ramhee98/aptwarden
+/opt/aptwarden/bin/pip install --no-deps --no-build-isolation \
+    git+https://github.com/ramhee98/aptwarden@v0.3.0
 # or from a wheel built with `pip wheel --no-deps -w dist .`
 ln -s /opt/aptwarden/bin/aptwarden /usr/local/bin/aptwarden
 
@@ -146,17 +148,31 @@ the service and the publish unit can no longer read. Read-only commands such as
 ### Updating
 
 ```sh
-/opt/aptwarden/bin/pip install --no-deps --no-build-isolation --force-reinstall \
-    git+https://github.com/ramhee98/aptwarden
+/opt/aptwarden/bin/pip install --no-deps --no-build-isolation \
+    git+https://github.com/ramhee98/aptwarden@v0.3.0
 aptwarden version && aptwarden config check
 runuser -u aptwarden -- aptwarden hosts check
 ```
 
 Notes on updating:
 
-- **`--force-reinstall` is required** when the version number did not change since the
-  last install; without it pip keeps the installed copy. To install a release instead
-  of the latest commit, append its tag: `git+https://github.com/ramhee98/aptwarden@v0.2.0`.
+- **Install release tags,** not `main`: a tag names one reviewed state, `main` is
+  whatever was pushed last. Testing an unreleased commit needs `--force-reinstall` while
+  the version number stays the same; without it pip keeps the installed copy.
+- **Installing a verified release:** pip does not check signatures. When releases are
+  tagged with `git tag -s` (see [Development](#development)), check the tag before
+  installing from the checked-out tree:
+
+  ```sh
+  git clone --quiet https://github.com/ramhee98/aptwarden /root/aptwarden-src
+  git -C /root/aptwarden-src -c gpg.format=ssh \
+      -c gpg.ssh.allowedSignersFile=/etc/aptwarden/release_signers verify-tag v0.3.0
+  git -C /root/aptwarden-src checkout --quiet v0.3.0
+  /opt/aptwarden/bin/pip install --no-deps --no-build-isolation /root/aptwarden-src
+  ```
+
+  `release_signers` lists the release key in `allowed_signers` format, like the
+  definitions signers file.
 - **`aptwarden version`** shows the installed version; the status page and
   `status.json` show it too.
 - **State and cache upgrade themselves:** `state.db` and `cache.db` migrate on first
@@ -868,11 +884,18 @@ containers with Debian's packages only.
 
 **Releases:** the version lives only in `src/aptwarden/__init__.py` (`pyproject.toml`
 reads it from there). Raise the minor version for new features or changes to the
-configuration or `status.json`, the patch version for fixes, then tag the commit:
+configuration or `status.json`, the patch version for fixes, then tag the commit,
+signed so that installations can verify it:
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git -c gpg.format=ssh -c user.signingkey=~/.ssh/release_ed25519.pub tag -s -m v0.3.0 v0.3.0
+git push origin v0.3.0
 ```
+
+CI also runs [bandit](https://bandit.readthedocs.io/) on `src` and
+[pip-audit](https://pypi.org/project/pip-audit/) on the dependencies, on every push and
+weekly. For release tags it attaches a CycloneDX SBOM (`sbom` artifact). Dependabot
+keeps the pinned action SHAs current.
 
 ## License
 

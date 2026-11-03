@@ -124,3 +124,10 @@ def test_read_body_reads_in_blocks_and_inflates_bounded():
     bomb = deflated.compress(b"\0" * (LIMIT * 50)) + deflated.flush()
     with pytest.raises(ResponseTooLarge, match="after decompression"):
         read_body(io.BytesIO(bomb), "u", LIMIT, gzipped=True)
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.org/x", "gopher://x/",
+                                 "/relative", "example.org/no-scheme"])
+def test_only_http_and_https_urls(url):
+    with pytest.raises(HttpError, match="only http and https URLs are allowed"):
+        client().get(url)

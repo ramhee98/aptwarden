@@ -203,13 +203,10 @@ class State:
             (int(Severity.CRITICAL), int(Severity.HIGH), str(FindingStatus.FIXABLE), host))]
 
     def latest(self, host: str, ok_only: bool = False) -> HostRecord | None:
-        sql = (
+        row = self.db.execute(
             "SELECT run_id, host, address, ok, error, summary, warnings, scanned_at "
-            "FROM host_results WHERE host = ?"
-            + (" AND ok = 1" if ok_only else "")
-            + " ORDER BY scanned_at DESC, run_id DESC LIMIT 1"
-        )
-        row = self.db.execute(sql, (host,)).fetchone()
+            "FROM host_results WHERE host = ? AND (ok = 1 OR NOT ?) "
+            "ORDER BY scanned_at DESC, run_id DESC LIMIT 1", (host, ok_only)).fetchone()
         if not row:
             return None
         rec = HostRecord(row[0], row[1], row[2], bool(row[3]), row[4], json.loads(row[5] or "{}"),
@@ -242,10 +239,9 @@ class State:
                             (run_id, host, status, started_at, json.dumps(data)))
 
     def patches(self, host: str | None = None, limit: int = 20) -> list[dict]:
-        sql = "SELECT data FROM patches" + (" WHERE host = ?" if host else "") + \
-            " ORDER BY started_at DESC, run_id DESC LIMIT ?"
-        args = (host, limit) if host else (limit,)
-        return [json.loads(r[0]) for r in self.db.execute(sql, args)]
+        return [json.loads(r[0]) for r in self.db.execute(
+            "SELECT data FROM patches WHERE (? IS NULL OR host = ?) "
+            "ORDER BY started_at DESC, run_id DESC LIMIT ?", (host, host, limit))]
 
     def add_snapshot(self, provider: str, target: str, name: str, host: str,
                      run_id: str) -> None:
