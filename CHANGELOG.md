@@ -14,6 +14,11 @@ commits.
 - The trend chart is smaller: a step line no longer repeats a point when a value is
   unchanged, and coordinates have one decimal at most. It looks the same.
 - Table headers carry `scope="col"` for screen readers.
+- Vulnerability descriptions are on the page only once, in a new **Vulnerabilities**
+  section at the end with severity, CVSS, KEV, description and affected hosts. Host
+  tables link their IDs there; that row links to the Debian tracker. With 40 similar
+  hosts the page is 36% smaller (75% with gzip). With 4 hosts that share fewer
+  vulnerabilities it is 9% larger uncompressed but 21% smaller with gzip.
 
 ## 0.4.0 (2026-11-03)
 

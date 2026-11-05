@@ -101,6 +101,11 @@ def _sev(sev: Severity) -> str:
 
 
 def _vuln_link(vuln_id: str) -> str:
+    """Link to the vulnerability's row in the "Vulnerabilities" section."""
+    return f'<a href="#v-{_e(vuln_id)}">{_e(vuln_id)}</a>'
+
+
+def _tracker_link(vuln_id: str) -> str:
     return f'<a href="{_e(TRACKER_URL + vuln_id)}" rel="noreferrer">{_e(vuln_id)}</a>'
 
 
@@ -147,10 +152,14 @@ def _patch_badge(status: str | None) -> str:
     return f'<span class="badge {cls}">{_e(status)}</span>'
 
 
+def _risk_order(f: Finding) -> tuple:
+    return -f.severity, not f.kev, -(f.cvss_score or 0), f.vuln_id
+
+
 def _finding_rows(findings: list[Finding], fixed_column: bool) -> str:
+    """Without descriptions: those are in the "Vulnerabilities" section, once per page."""
     rows = []
-    for f in sorted(findings, key=lambda f: (-f.severity, not f.kev, -(f.cvss_score or 0),
-                                              f.vuln_id)):
+    for f in sorted(findings, key=_risk_order):
         score = f"{f.cvss_score:.1f}" if f.cvss_score is not None else "-"
         flags = " ".join(filter(None, [
             '<span class="badge bad">KEV</span>' if f.kev else "",
@@ -159,9 +168,52 @@ def _finding_rows(findings: list[Finding], fixed_column: bool) -> str:
         ]))
         last = _e(f.fixed_version or "-") if fixed_column else _e(f.status)
         rows.append(f"<tr><td>{_vuln_link(f.vuln_id)}</td><td>{_sev(f.severity)}</td>"
-                    f'<td class="num">{score}</td><td>{last}</td><td>{flags}</td>'
-                    f"<td>{_e(truncate(f.description, 160))}</td></tr>")
+                    f'<td class="num">{score}</td><td>{last}</td><td>{flags}</td></tr>')
     return "".join(rows)
+
+
+def _listed(rec: HostRecord, min_severity: Severity
+            ) -> tuple[list[Finding], list[Finding], list[Finding]]:
+    """(fixable, not fixable, the not fixable ones listed) of a host's findings."""
+    fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
+    others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
+    notable = [f for f in others if f.severity >= min_severity or f.kev][:MAX_OTHER]
+    return fixable, others, notable
+
+
+def _vulnerabilities(records: list[tuple[HostRecord, str | None]],
+                     min_severity: Severity) -> str:
+    """Every vulnerability listed in a host's details, once, with its description and
+    hosts. The host tables link here instead of repeating the descriptions."""
+    found: dict[str, list[tuple[str, Finding]]] = {}
+    for rec, _ in records:
+        fixable, _, notable = _listed(rec, min_severity)
+        for f in fixable + notable:
+            found.setdefault(f.vuln_id, []).append((rec.host, f))
+    if not found:
+        return ""
+    rows = []
+    for vuln_id, items in found.items():
+        # the hosts' data can differ (e.g. a score only from one source): take the worst
+        findings = [f for _, f in items]
+        severity = max(f.severity for f in findings)
+        cvss = max((f.cvss_score for f in findings if f.cvss_score is not None), default=None)
+        kev = any(f.kev for f in findings)
+        description = next((f.description for f in findings if f.description), "")
+        hosts = ", ".join(map(_host_link, dict.fromkeys(host for host, _ in items)))
+        score = f"{cvss:.1f}" if cvss is not None else "-"
+        badge = '<span class="badge bad">KEV</span>' if kev else ""
+        rows.append(((-severity, not kev, -(cvss or 0), vuln_id),  # as _risk_order
+                     f'<tr id="v-{_e(vuln_id)}"><td>{_tracker_link(vuln_id)}</td>'
+                     f'<td>{_sev(severity)}</td><td class="num">{score}</td><td>{badge}</td>'
+                     f"<td>{_e(truncate(description, 160))}</td><td>{hosts}</td></tr>"))
+    rows.sort(key=lambda r: r[0])
+    return (f"<h2>Vulnerabilities</h2>"
+            f'<p class="muted">{len(rows)} vulnerabilities listed in the host details, each '
+            "once. IDs link to the Debian security tracker.</p>"
+            '<div class="wrap"><table>'
+            + _head("ID", "Severity", "CVSS", "", "Description", "Hosts")
+            + "".join(row for _, row in rows) + "</table></div>")
 
 
 def _modes_badges(host: HostConfig | None) -> str:
@@ -362,8 +414,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
                   health: tuple[dict, str] | None = None,
                   trend: list[tuple[str, int, int, int]] | None = None) -> str:
     s = rec.summary
-    fixable = [f for f in rec.findings if f.status == FindingStatus.FIXABLE]
-    others = [f for f in rec.findings if f.status != FindingStatus.FIXABLE]
+    fixable, others, notable = _listed(rec, min_severity)
     parts = [f'<details id="{_e(rec.host)}"><summary>{_e(rec.host)} '
              f'<span class="muted">· {_e(rec.address or "")} · Debian '
              f'{_e(s.get("debian_version", "?"))} ({_e(s.get("codename", "?"))}) · '
@@ -390,18 +441,17 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
                          f"<td>{_vuln_link(g.top.vuln_id)}{kev}</td></tr>")
         parts.append("</table></div>")
         parts.append('<details><summary>All fixable vulnerabilities</summary><div class="wrap">'
-                     "<table>" + _head("ID", "Severity", "CVSS", "Fixed in", "", "Description")
+                     "<table>" + _head("ID", "Severity", "CVSS", "Fixed in", "")
                      + _finding_rows(fixable, fixed_column=True) + "</table></div></details>")
 
     counts = Counter(f.status for f in others)
     parts.append(f'<p class="muted">not fixable: fix pending '
                  f'{counts[FindingStatus.FIX_PENDING]} · no fix {counts[FindingStatus.NO_FIX]} · '
                  f'undetermined {counts[FindingStatus.UNDETERMINED]}</p>')
-    notable = [f for f in others if f.severity >= min_severity or f.kev][:MAX_OTHER]
     if notable:
         parts.append(f"<details><summary>Not fixable yet, {_e(min_severity)} and above "
                      f"({len(notable)})</summary><div class=\"wrap\"><table>"
-                     + _head("ID", "Severity", "CVSS", "Status", "", "Description")
+                     + _head("ID", "Severity", "CVSS", "Status", "")
                      + _finding_rows(notable, fixed_column=False) + "</table></div></details>")
 
     if health:
@@ -689,6 +739,7 @@ changes appear after the next report or patch run.</p>
 {sources_html}
 <h2>Host details</h2>
 {hosts_html}
+{_vulnerabilities(records, min_severity)}
 </main></body>
 </html>
 """

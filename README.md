@@ -657,8 +657,8 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   windows in the host's own time zone
 - for hosts with `patch` in `policy.modes`, in the table and in the host's details: the
   start of the next maintenance window and what it would patch (see below)
-- per host: the fixable packages, every vulnerability (collapsible), the patch history
-  and aptwarden's snapshots
+- per host: the fixable packages, every vulnerability (collapsible: ID, severity, CVSS,
+  fixed version or status), the patch history and aptwarden's snapshots
 - per host: a small chart of the fixable vulnerabilities over the stored scans (total,
   critical and high), with the period it covers; hovering a point shows its values (see
   below)
@@ -667,6 +667,8 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   the rollback), else those before patching, with the run and its time. Dry runs are not
   stored, so they do not appear here
 - the state of the data sources and definitions, including rejected releases
+- at the end, **Vulnerabilities**: every vulnerability listed in a host's details, once
+  (see below)
 
 **Needs attention** lists, worst first, everything that needs a human. Each host links
 to its details:
@@ -684,6 +686,13 @@ to its details:
   keeps them visible.
 
 When none of this applies, the block says "Nothing needs attention".
+
+**Vulnerabilities** has one row per vulnerability with its ID, severity, CVSS score, KEV
+badge, description and the hosts that have it. The ID links to the Debian security
+tracker. The host tables and the Needs attention block show no descriptions: their
+vulnerability IDs link to this row instead, so a description shared by many hosts is
+on the page only once. Where the hosts' data differ, the row shows the highest severity
+and score. The section is not collapsible, so these links always land on the row.
 
 The page is always rendered from the stored state of every configured host, so a patch
 run of one host does not hide the others. It has no JavaScript and no forms. A

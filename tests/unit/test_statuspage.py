@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import re
@@ -216,6 +217,62 @@ def test_needs_attention_groups_kev_by_vulnerability(make_config):
     assert data["needs_attention"] == 6
     by_name = {h["name"]: h["needs_attention"] for h in data["hosts_detail"]}
     assert by_name == {"web01": 2, "web02": 1, "old01": 1, "mail01": 2, "clean01": 0}
+
+
+def test_vulnerabilities_listed_once(make_config):
+    cfg = make_config(hosts=[{"name": n} for n in ("web01", "web02", "db01")])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+
+    def finding(vuln_id, status=FindingStatus.FIXABLE, **kw):
+        return Finding(vuln_id, "openssl", "3.5.1-1", status, fixed_version="3.5.7-1",
+                       description=f"Description of {vuln_id} <b>", **kw)
+
+    shared = finding("CVE-2026-1", severity=Severity.HIGH, cvss_score=7.5)
+    save_scan(state, "web01", [shared, finding("CVE-2026-2", severity=Severity.CRITICAL,
+                                               kev=True)])
+    save_scan(state, "web02", [dataclasses.replace(shared, cvss_score=None),
+                               finding("CVE-2026-3", FindingStatus.NO_FIX,
+                                       severity=Severity.HIGH),
+                               finding("CVE-2026-4", FindingStatus.NO_FIX,
+                                       severity=Severity.LOW)])  # below min_severity
+    save_scan(state, "db01", [shared])
+    page = statuspage.render(cfg, state)
+    state.close()
+
+    details = page.split("<h2>Host details</h2>")[1].split("<h2>Vulnerabilities</h2>")[0]
+    vulns = page.split("<h2>Vulnerabilities</h2>")[1]
+    # each description exactly once on the page, escaped, and only in the new section
+    for vuln_id in ("CVE-2026-1", "CVE-2026-2", "CVE-2026-3"):
+        assert page.count(f"Description of {vuln_id} &lt;b&gt;") == 1
+        assert f"Description of {vuln_id}" in vulns
+    assert "Description of" not in details and "<b>" not in page
+    assert "CVE-2026-4" not in page  # not listed for its host, so not here either
+    # the host tables link to the section, the section to the Debian tracker
+    links = set(re.findall(r'href="#v-([^"]+)"', page))
+    anchors = set(re.findall(r'<tr id="v-([^"]+)">', vulns))
+    assert links == anchors == {"CVE-2026-1", "CVE-2026-2", "CVE-2026-3"}
+    assert "security-tracker" not in details
+    rows = dict(re.findall(r'<tr id="v-([^"]+)">(.*?)</tr>', vulns))
+    assert ('<a href="https://security-tracker.debian.org/tracker/CVE-2026-1" '
+            'rel="noreferrer">CVE-2026-1</a>') in rows["CVE-2026-1"]
+    # one row per vulnerability: worst first, the highest score, every host
+    assert list(rows) == ["CVE-2026-2", "CVE-2026-1", "CVE-2026-3"]
+    assert '<td class="num">7.5</td>' in rows["CVE-2026-1"]
+    assert rows["CVE-2026-1"].endswith('<td><a href="#web01">web01</a>, '
+                                       '<a href="#web02">web02</a>, <a href="#db01">db01</a></td>')
+    assert '<span class="badge bad">KEV</span>' in rows["CVE-2026-2"]
+    assert '<span class="badge bad">KEV</span>' not in rows["CVE-2026-1"]
+
+
+def test_no_vulnerabilities_section_without_findings(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    save_scan(state, "web01")
+    page = statuspage.render(cfg, state)
+    state.close()
+    assert "<h2>Vulnerabilities</h2>" not in page
 
 
 def test_nothing_needs_attention(make_config):
