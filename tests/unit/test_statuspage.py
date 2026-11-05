@@ -322,7 +322,7 @@ def test_next_window_and_preview(make_config):
     # Monday 2026-11-02 10:00 CET
     page = render_preview(preview_cfg(make_config), datetime(2026, 11, 2, 9, 0, tzinfo=UTC))
     table = page.split("<h2>Hosts</h2>")[1].split("<h2>")[0]
-    assert "<th>Next patch (preview)</th>" in table
+    assert '<th scope="col">Next patch (preview)</th>' in table
     assert ("2026-11-03 03:00 CET<br><span class=\"muted\">would patch: openssl, inetutils "
             "(2 critical, 1 high)</span>") in table
     # in the host's own time zone; nothing allowed by its policy
@@ -401,6 +401,54 @@ def test_status_json_all_clear(make_config):
     state.close()
     assert data["needs_attention"] == 0 and data["hosts_failing"] == 0
     assert data["hosts_detail"][0]["scan_ok"] is True
+
+
+def test_trend_without_repeated_points():
+    # unchanged values on most scans: each would repeat the point its step ends on
+    values = [(5, 1, 2), (5, 1, 2), (5, 1, 2), (7, 2, 2), (7, 2, 2), (1, 0, 1), (1, 0, 1),
+              (13, 3, 4), (13, 3, 4), (0, 0, 0)]
+    points = [(f"2026-10-{day:02d}T06:00:00+00:00", *v) for day, v in enumerate(values, 1)]
+    svg = statuspage._trend(points, "UTC")
+
+    lines = dict(re.findall(r'<polyline class="(\w+)" points="([^"]+)"', svg))
+    assert set(lines) == {"total", "crit", "hi"}
+    for col, cls in ((0, "total"), (1, "crit"), (2, "hi")):
+        coords = [tuple(map(float, c.split(","))) for c in lines[cls].split()]
+        assert all(coords[i] != coords[i - 1] for i in range(1, len(coords))), cls
+        for c in lines[cls].split():
+            assert re.fullmatch(r"\d+(\.\d)?,\d+(\.\d)?", c) and ".0," not in c + ","
+        # the same step shape: every scan's value is reached at its x, and held until the next
+        xs = sorted({x for x, _ in coords})
+        assert len(xs) == len(values)
+        top = 13
+        for i, x in enumerate(xs):
+            y = round(4 + 48 * (1 - values[i][col] / top), 1)
+            assert (x, y) in coords
+            if i:
+                y_before = round(4 + 48 * (1 - values[i - 1][col] / top), 1)
+                assert (x, y_before) in coords
+        # a horizontal run over unchanged scans keeps its end points only
+        assert len(coords) == 2 * len(values) - 1 - sum(
+            values[i][col] == values[i - 1][col] for i in range(1, len(values)))
+
+    # the values for screen readers and tooltips are unchanged
+    summary = ("Fixable vulnerabilities, 10 scans, 2026-10-01 06:00 UTC – 2026-10-10 06:00 UTC: "
+               "now 0 (0 critical, 0 high), highest 13")
+    assert f'aria-label="{summary}"><title>{summary}</title>' in svg
+    assert re.findall(r"<circle[^>]*><title>([^<]+)</title>", svg) == [
+        f"{when[:10]} 06:00 UTC: {t} fixable, {c} critical, {h} high"
+        for when, t, c, h in points]
+
+
+def test_table_headers_have_scope(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}, {"name": "db01"}])
+    state = State(cfg.state_dir / "state.db")
+    seed(state)
+    page = statuspage.render(cfg, state)
+    state.close()
+    headers = re.findall(r"<th[ >]", page)
+    assert len(headers) > 10
+    assert len(headers) == page.count('<th scope="col">')
 
 
 def save_health(state, run_id, host, status, started, **health):
@@ -511,9 +559,11 @@ def test_fixable_history(make_config):
     assert "#" not in svg and "style=" not in svg and "<script" not in svg
     assert ".trend .crit{stroke:var(--crit)}" in page
 
-    # step line: the value holds until the next scan (y = 4 at 3 of 3, 52 at 0)
+    # step line: the value holds until the next scan (y = 4 at 3 of 3, 52 at 0); one decimal,
+    # whole numbers without
     total = re.search(r'<polyline class="total" points="([^"]+)"', svg)[1].split()
-    assert total[0] == "4.0,4.0" and total[1].endswith(",4.0") and total[-1].endswith(",52.0")
+    assert total == ["4,4", "265.4,4", "265.4,20", "296,20", "296,52"]
+    assert '<circle r="2" cx="296" cy="52"/>' in svg
 
     db = host_details(page, "db01")
     assert "1 stored scan, 2026-11-02 06:00 UTC" in db and "<polyline" not in db

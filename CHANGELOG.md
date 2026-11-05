@@ -11,6 +11,9 @@ commits.
   hosts that have it, instead of one entry per host. The fixed version is given once, or
   per host where they differ. `needs_attention` in `status.json` still counts per host
   and problem, so monitoring rules are unaffected.
+- The trend chart is smaller: a step line no longer repeats a point when a value is
+  unchanged, and coordinates have one decimal at most. It looks the same.
+- Table headers carry `scope="col"` for screen readers.
 
 ## 0.4.0 (2026-11-03)
 

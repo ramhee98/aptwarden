@@ -237,8 +237,8 @@ def _next_patch_section(nxt: NextPatch, scanned_at: str | None, tz: str | None) 
              f'({_ts(scanned_at, tz)})</span></h3>',
              f"<p>window: {_e(nxt.when)}<br>would patch: {_e(nxt.summary)}</p>"]
     if nxt.items:
-        parts.append('<div class="wrap"><table><tr><th>Severity</th><th>Package</th>'
-                     "<th>Installed</th><th>Fixed in</th><th>Vulns</th><th></th></tr>")
+        parts.append('<div class="wrap"><table>'
+                     + _head("Severity", "Package", "Installed", "Fixed in", "Vulns", ""))
         for i in nxt.items:
             held = (f'<span class="badge warn">held back</span> {_e(i.skipped)}'
                     if i.skipped else "")
@@ -272,21 +272,27 @@ def _trend(points: list[tuple[str, int, int, int]], tz: str | None) -> str:
     top = max(max(p[1] for p in points), 1)
     inner_w, inner_h = TREND_W - 2 * TREND_PAD, TREND_H - 2 * TREND_PAD
 
-    def xy(i: int, value: int) -> str:
+    def num(v: float) -> str:
+        """One decimal, whole numbers without one: keeps the page small."""
+        text = f"{v:.1f}"
+        return text.removesuffix(".0")
+
+    def xy(i: int, value: int) -> tuple[str, str]:
         x = TREND_PAD + (inner_w * (times[i] - t0) / (t1 - t0) if t1 > t0 else inner_w / 2)
         y = TREND_PAD + inner_h * (1 - value / top)
-        return f"{x:.1f},{y:.1f}"
+        return num(x), num(y)
 
     def line(col: int, cls: str) -> str:
-        """A step line: a value holds until the next scan."""
+        """A step line: a value holds until the next scan. An unchanged value would repeat
+        the point it ends on, so repeats are left out; the shape stays the same."""
         if len(points) == 1:
             return ""
         coords = [xy(0, points[0][col])]
         for i in range(1, len(points)):
-            coords += [f"{xy(i, points[i - 1][col]).split(',')[0]},"
-                       f"{xy(i - 1, points[i - 1][col]).split(',')[1]}",
+            coords += [(xy(i, 0)[0], xy(i - 1, points[i - 1][col])[1]),
                        xy(i, points[i][col])]
-        return f'<polyline class="{cls}" points="{" ".join(coords)}"/>'
+        kept = [c for n, c in enumerate(coords) if n == 0 or c != coords[n - 1]]
+        return f'<polyline class="{cls}" points="{" ".join(",".join(c) for c in kept)}"/>'
 
     first, last = _when(points[0][0], tz), _when(points[-1][0], tz)
     latest = points[-1]
@@ -296,7 +302,7 @@ def _trend(points: list[tuple[str, int, int, int]], tz: str | None) -> str:
                f"highest {max(p[1] for p in points)}")
     marks = []
     for i, (when, total, crit, high) in enumerate(points):
-        x, y = xy(i, total).split(",")
+        x, y = xy(i, total)
         label = f"{_when(when, tz)}: {total} fixable, {crit} critical, {high} high"
         dot = '<circle r="2" cx="{x}" cy="{y}"/>' if i == len(points) - 1 else ""
         marks.append(dot.format(x=x, y=y)
@@ -373,9 +379,8 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
         parts.append(_next_patch_section(next_patch, rec.scanned_at, tz))
 
     if fixable:
-        parts.append('<h3>Fixable now</h3><div class="wrap"><table><tr><th>Severity</th>'
-                     '<th>Package</th><th>Installed</th><th>Fixed in</th><th>Vulns</th>'
-                     '<th>Top</th></tr>')
+        parts.append('<h3>Fixable now</h3><div class="wrap"><table>'
+                     + _head("Severity", "Package", "Installed", "Fixed in", "Vulns", "Top"))
         for g in group_findings(fixable):
             kev = ' <span class="badge bad">KEV</span>' if g.kev else ""
             parts.append(f"<tr><td>{_sev(g.severity)}</td><td>{_e(g.source_package)}</td>"
@@ -385,8 +390,7 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
                          f"<td>{_vuln_link(g.top.vuln_id)}{kev}</td></tr>")
         parts.append("</table></div>")
         parts.append('<details><summary>All fixable vulnerabilities</summary><div class="wrap">'
-                     "<table><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Fixed in</th>"
-                     "<th></th><th>Description</th></tr>"
+                     "<table>" + _head("ID", "Severity", "CVSS", "Fixed in", "", "Description")
                      + _finding_rows(fixable, fixed_column=True) + "</table></div></details>")
 
     counts = Counter(f.status for f in others)
@@ -396,16 +400,15 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     notable = [f for f in others if f.severity >= min_severity or f.kev][:MAX_OTHER]
     if notable:
         parts.append(f"<details><summary>Not fixable yet, {_e(min_severity)} and above "
-                     f"({len(notable)})</summary><div class=\"wrap\"><table><tr><th>ID</th>"
-                     "<th>Severity</th><th>CVSS</th><th>Status</th><th></th>"
-                     "<th>Description</th></tr>"
+                     f"({len(notable)})</summary><div class=\"wrap\"><table>"
+                     + _head("ID", "Severity", "CVSS", "Status", "", "Description")
                      + _finding_rows(notable, fixed_column=False) + "</table></div></details>")
 
     if health:
         parts.append(_health_section(health, tz))
     if patches:
-        parts.append('<h3>Patch history</h3><div class="wrap"><table><tr><th>Started</th>'
-                     "<th>Status</th><th>Packages</th><th>Snapshot</th><th>Reason</th></tr>")
+        parts.append('<h3>Patch history</h3><div class="wrap"><table>'
+                     + _head("Started", "Status", "Packages", "Snapshot", "Reason"))
         for p in patches:
             pkgs = ", ".join(i["source_package"] for i in p.get("items", []))
             snap = (p.get("snapshot") or {}).get("name", "-")
@@ -420,6 +423,11 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
             f"{_ts(x['created_at'], tz)} ({_e(x['state'])})</li>" for x in snapshots) + "</ul>")
     parts.append("</details>")
     return "".join(parts)
+
+
+def _head(*columns: str) -> str:
+    """A table's header row; scope tells screen readers the cells are column headers."""
+    return "<tr>" + "".join(f'<th scope="col">{_e(c)}</th>' for c in columns) + "</tr>"
 
 
 def _host_link(name: str) -> str:
@@ -668,8 +676,8 @@ aptwarden {_e(__version__)}
 {_attention(st.attention)}
 <h2>Hosts</h2>
 <div class="wrap"><table>
-<tr><th>Host</th><th>Modes</th><th>Scan</th><th>Fixable</th><th>Critical</th><th>High</th><th>KEV</th>
-<th>Scanned</th><th>Last patch</th><th>Next patch (preview)</th></tr>
+{_head("Host", "Modes", "Scan", "Fixable", "Critical", "High", "KEV", "Scanned",
+       "Last patch", "Next patch (preview)")}
 {"".join(row for _, row in rows)}
 </table></div>
 <p class="muted">Hosts with errors first, then by known exploited, critical and high
