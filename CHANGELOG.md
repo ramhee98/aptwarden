@@ -3,7 +3,7 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
-## Unreleased
+## 0.5.0 (2026-11-05)
 
 ### Status page
 
@@ -21,6 +21,11 @@ commits.
   tables link their IDs there; that row links to the Debian tracker. With 40 similar
   hosts the page is 36% smaller (75% with gzip). With 4 hosts that share fewer
   vulnerabilities it is 9% larger uncompressed but 21% smaller with gzip.
+
+### Upgrade notes
+
+- No manual steps: configuration, helper (version 2), systemd units and the format of
+  `status.json` are unchanged. The page is rewritten by the next report.
 
 ## 0.4.0 (2026-11-03)
 
