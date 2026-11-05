@@ -3,6 +3,15 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Status page
+
+- **Needs attention** shows a fixable known exploited (KEV) vulnerability once, with all
+  hosts that have it, instead of one entry per host. The fixed version is given once, or
+  per host where they differ. `needs_attention` in `status.json` still counts per host
+  and problem, so monitoring rules are unaffected.
+
 ## 0.4.0 (2026-11-03)
 
 ### Security

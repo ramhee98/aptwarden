@@ -668,14 +668,17 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
   stored, so they do not appear here
 - the state of the data sources and definitions, including rejected releases
 
-**Needs attention** lists, worst first, everything that needs a human. Each entry links
-to the host's details:
+**Needs attention** lists, worst first, everything that needs a human. Each host links
+to its details:
 
 - hosts whose last patch run ended `needs-manual-rollback`, `rollback-failed` or `failed`
   (`rolled-back` is not listed: the host is back on its snapshot. An `aptwarden
   rollback` also ends as `rolled-back` and clears the entry)
 - hosts whose last scan failed
-- fixable known exploited (KEV) vulnerabilities, one entry each
+- fixable known exploited (KEV) vulnerabilities, one entry per vulnerability and
+  package with all hosts that have it, e.g. "KEV CVE-2026-10 critical in brotli, fixed
+  in 1.1.0-2+deb13u1 — web01, web02". If the hosts need different fixed versions (for
+  example on different Debian releases), the version is given per host.
 - hosts whose last patch runs were `aborted` at least twice in a row, with the reason.
   An abort with the same reason as the previous run sends no further mail, so the page
   keeps them visible.
@@ -748,7 +751,10 @@ vulnerability texts or addresses.
 
 - Times are UTC in ISO 8601.
 - `hosts` counts scanned hosts, `not_scanned` the configured hosts never scanned.
-- `needs_attention` is the number of entries in the **Needs attention** block.
+- `needs_attention` counts the problems in the **Needs attention** block per host: a
+  KEV entry listing three hosts counts three, the same as before KEV entries were
+  grouped, so existing monitoring rules keep working. Per host, it is the number of
+  problems that host has.
 - `scan_ok` is `false` when the latest scan failed and `null` before the first one.
 
 The publish unit pushes it together with the page.

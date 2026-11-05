@@ -157,11 +157,13 @@ def test_needs_attention_and_risk_order(make_config):
     state.close()
 
     attention = page.split("<h2>Needs attention</h2>")[1].split("<h2>Hosts</h2>")[0]
-    entries = re.findall(r'<li><a href="#([\w.-]+)">', attention)
-    assert entries == ["mail01", "db01", "web01", "app01"]
+    entries = re.findall(r'<li>(?:<a href="#([\w.-]+)">|<span class="badge bad">(KEV))',
+                         attention)
+    assert ["".join(e) for e in entries] == ["mail01", "db01", "KEV", "app01"]
     assert "needs-manual-rollback" in attention and "rollback: manual" in attention
     assert "latest scan 2026-10-23 06:00 UTC failed: ssh: timed out" in attention
     assert "CVE-2026-24061" in attention and "2:2.6-3+deb13u3" in attention
+    assert '2:2.6-3+deb13u3</code> — <a href="#web01">web01</a></li>' in attention
     assert "CVE-2026-2<" not in attention  # fixable, but not known exploited
     assert "2 patch runs in a row · simulation: held packages" in attention
     assert "rolled-back" not in attention  # fixed itself
@@ -170,6 +172,50 @@ def test_needs_attention_and_risk_order(make_config):
     table = page.split("<h2>Hosts</h2>")[1].split("<h2>")[0]
     assert re.findall(r'<tr><td><a href="#([\w.-]+)">', table) == [
         "db01", "mail01", "web01", "crit01", "high01", "aaa01", "app01", "once01"]
+
+
+def kev(vuln_id, package, fixed, severity=Severity.CRITICAL):
+    return Finding(vuln_id, package, "1", FindingStatus.FIXABLE, fixed_version=fixed,
+                   severity=severity, kev=True)
+
+
+def test_needs_attention_groups_kev_by_vulnerability(make_config):
+    names = ["web01", "web02", "old01", "mail01", "clean01"]
+    cfg = make_config(hosts=[{"name": n} for n in names])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    save_scan(state, "web01", [kev("CVE-2026-10", "brotli", "1.1.0-2+deb13u1"),
+                               kev("CVE-2026-11", "curl", "8.14-2", Severity.HIGH)])
+    save_scan(state, "web02", [kev("CVE-2026-10", "brotli", "1.1.0-2+deb13u1")])
+    save_scan(state, "old01", [kev("CVE-2026-11", "curl", "7.88-10+deb12u9", Severity.HIGH)])
+    save_scan(state, "mail01", [kev("CVE-2026-10", "brotli", "1.1.0-2+deb13u1")])
+    save_patch(state, "p1", "mail01", "failed", "2026-10-23T02:00:00+00:00", "apt failed")
+    save_scan(state, "clean01")
+    st = statuspage.collect(cfg, state, datetime(2026, 11, 2, 6, 30, tzinfo=UTC))
+    page = statuspage.render(cfg, state, st=st)
+    data = statuspage.status_json(st)
+    state.close()
+
+    attention = page.split("<h2>Needs attention</h2>")[1].split("<h2>Hosts</h2>")[0]
+    items = re.findall(r"<li>(.*?)</li>", attention)
+    assert len(items) == 3  # mail01 failed; one entry per vulnerability
+    assert items[0].startswith('<a href="#mail01">mail01</a>: last patch run')
+    # the same fixed version everywhere: given once, then the hosts
+    assert "CVE-2026-10" in items[1] and "critical" in items[1]
+    assert items[1].endswith(
+        " in brotli, fixed in <code>1.1.0-2+deb13u1</code> — "
+        '<a href="#web01">web01</a>, <a href="#web02">web02</a>, '
+        '<a href="#mail01">mail01</a>')
+    # different fixed versions (e.g. Debian 12 and 13): one per host
+    assert "CVE-2026-11" in items[2] and "high" in items[2]
+    assert items[2].endswith(
+        ' in curl — <a href="#web01">web01</a> (fixed in <code>8.14-2</code>), '
+        '<a href="#old01">old01</a> (fixed in <code>7.88-10+deb12u9</code>)')
+
+    # status.json still counts per host and problem, as before the grouping
+    assert data["needs_attention"] == 6
+    by_name = {h["name"]: h["needs_attention"] for h in data["hosts_detail"]}
+    assert by_name == {"web01": 2, "web02": 1, "old01": 1, "mail01": 2, "clean01": 0}
 
 
 def test_nothing_needs_attention(make_config):

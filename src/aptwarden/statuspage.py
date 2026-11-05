@@ -436,35 +436,60 @@ def _aborted_streak(history: list[dict]) -> int:
 
 
 def _attention_items(records: list[tuple[HostRecord, str | None]],
-                     history: dict[str, list[dict]], tz: str | None) -> list[tuple[str, str]]:
-    """(host, html) for everything that needs a human, worst first."""
-    failed, scans, kev, aborts = [], [], [], []
+                     history: dict[str, list[dict]],
+                     tz: str | None) -> list[tuple[tuple[str, ...], str]]:
+    """(hosts, html) for everything that needs a human, worst first. A known exploited
+    vulnerability is one entry for all its hosts; the others are one entry per host."""
+    failed, scans, aborts = [], [], []
+    kev: dict[tuple[str, str], list[tuple[str, Finding]]] = {}
     for rec, error in records:
         latest = (history[rec.host] or [{}])[0]
         link = _host_link(rec.host)
         if latest.get("status") in ATTENTION_PATCH:
-            failed.append((rec.host, f"{link}: last patch run "
+            failed.append(((rec.host,), f"{link}: last patch run "
                            f"{_patch_badge(latest['status'])} "
                            f"{_ts(latest.get('started_at'), tz)}"
                            f" · {_e(truncate(latest.get('reason', ''), 160))}"))
         if error:
-            scans.append((rec.host, f'{link}: <span class="bad">{_e(error)}</span>'))
-        for f in sorted(rec.findings, key=lambda f: (-f.severity, f.vuln_id)):
+            scans.append(((rec.host,), f'{link}: <span class="bad">{_e(error)}</span>'))
+        for f in rec.findings:
             if f.kev and f.status == FindingStatus.FIXABLE:
-                kev.append((rec.host, f'{link}: <span class="badge bad">KEV</span> '
-                            f"{_vuln_link(f.vuln_id)} {_sev(f.severity)} in "
-                            f"{_e(f.source_package)}, fixed in "
-                            f"<code>{_e(f.fixed_version or '?')}</code>"))
+                kev.setdefault((f.vuln_id, f.source_package), []).append((rec.host, f))
         streak = _aborted_streak(history[rec.host])
         if streak >= REPEATED_ABORTS:
             more = "+" if streak == len(history[rec.host]) == PATCH_HISTORY else ""
-            aborts.append((rec.host, f"{link}: {_patch_badge('aborted')} "
+            aborts.append(((rec.host,), f"{link}: {_patch_badge('aborted')} "
                            f"{streak}{more} patch runs in a row · "
                            f"{_e(truncate(latest.get('reason', ''), 160))}"))
-    return failed + scans + kev + aborts
+    return failed + scans + _kev_items(kev) + aborts
 
 
-def _attention(items: list[tuple[str, str]]) -> str:
+def _kev_items(kev: dict[tuple[str, str], list[tuple[str, Finding]]]
+               ) -> list[tuple[tuple[str, ...], str]]:
+    """One entry per vulnerability and package, with all affected hosts. The fixed version
+    is given once, or per host where the hosts differ (e.g. other Debian releases)."""
+    def fixed(f: Finding) -> str:
+        return f"<code>{_e(f.fixed_version or '?')}</code>"
+
+    items = []
+    for (vuln_id, package), found in kev.items():
+        by_host: dict[str, Finding] = {}
+        for host, f in found:
+            by_host.setdefault(host, f)
+        severity = max(f.severity for f in by_host.values())
+        if len({f.fixed_version for f in by_host.values()}) == 1:
+            where = (f", fixed in {fixed(found[0][1])} — "
+                     + ", ".join(map(_host_link, by_host)))
+        else:
+            where = " — " + ", ".join(f"{_host_link(host)} (fixed in {fixed(f)})"
+                                      for host, f in by_host.items())
+        items.append(((-severity, vuln_id, package), (tuple(by_host), (
+            f'<span class="badge bad">KEV</span> {_vuln_link(vuln_id)} {_sev(severity)} in '
+            f"{_e(package)}{where}"))))
+    return [item for _, item in sorted(items)]
+
+
+def _attention(items: list[tuple[tuple[str, ...], str]]) -> str:
     if not items:
         return '<p class="good">Nothing needs attention</p>'
     return ('<div class="attention"><ul>' + "".join(f"<li>{html}</li>" for _, html in items)
@@ -489,7 +514,7 @@ class Status:
     last_run: str | None
     history: dict[str, list[dict]]
     upcoming: dict[str, NextPatch | None]
-    attention: list[tuple[str, str]]
+    attention: list[tuple[tuple[str, ...], str]]  # (hosts, html)
     health: dict[str, tuple[dict, str] | None]  # latest healthcheck results per host
 
 
@@ -537,7 +562,8 @@ def _utc(value: str | datetime | None) -> str | None:
 
 def status_json(st: Status) -> dict:
     """Numbers and states only: no package names, vulnerability texts or addresses."""
-    attention = Counter(host for host, _ in st.attention)
+    # per host and problem: a KEV entry counts once for each of its hosts
+    attention = Counter(host for hosts, _ in st.attention for host in hosts)
     hosts = []
     for rec, error in st.records:
         patch = (st.history[rec.host] or [{}])[0]
@@ -555,7 +581,7 @@ def status_json(st: Status) -> dict:
     return {"generated_at": _utc(st.now), "last_run": st.last_run,
             "hosts": len(st.records), "hosts_failing": sum(1 for _, e in st.records if e),
             "fixable": total["fixable"], "critical": total["critical"], "high": total["high"],
-            "kev": total["kev"], "needs_attention": len(st.attention),
+            "kev": total["kev"], "needs_attention": attention.total(),
             "not_scanned": len(st.missing), "aptwarden": __version__, "hosts_detail": hosts}
 
 
