@@ -389,12 +389,13 @@ def test_next_window_and_preview(make_config):
     rep_row = next(r for r in table.split("<tr>") if 'href="#rep01"' in r)
     assert rep_row.endswith('<td><span class="muted">-</span></td></tr>')
 
-    web = page.split('<details id="web01">')[1].split('<details id="ny01">')[0]
+    web = page.split('<span class="anchor" id="web01">')[1].split(
+        '<span class="anchor" id="ny01">')[0]
     assert "Next patch run <span class=\"muted\">· preview based on the last scan " \
            "(2026-11-02 06:00 CET)" in web
     assert "window: 2026-11-03 03:00 CET<br>would patch: openssl, inetutils" in web
     assert "held back</span> fixed version 8.1-2 is blocked by AW-2026-0009" in web
-    assert "Next patch run" not in page.split('<details id="rep01">')[1]
+    assert "Next patch run" not in page.split('<span class="anchor" id="rep01">')[1]
 
 
 def test_preview_window_open_and_severity_policy(make_config):
@@ -515,7 +516,23 @@ def save_health(state, run_id, host, status, started, **health):
 
 
 def host_details(page, host):
-    return page.split(f'<details id="{host}">')[1].split("</details>\n")[0]
+    return page.split(f'<span class="anchor" id="{host}"></span>')[1].split("</details>\n")[0]
+
+
+def test_host_links_target_an_element_inside_the_section(make_config):
+    # A link to an element inside a closed <details> opens it in Chrome, Firefox and
+    # Safari; a link to the <details> itself only scrolls there.
+    cfg = make_config(hosts=[{"name": "web01"}, {"name": "db01"}])
+    state = State(cfg.state_dir / "state.db")
+    seed(state)
+    page = statuspage.render(cfg, state)
+    state.close()
+    for host in ("web01", "db01"):
+        assert re.search(rf'<details class="host"><summary>{host} .*?</summary>'
+                         rf'<span class="anchor" id="{host}"></span>', page)
+        assert f'href="#{host}"' in page
+    assert "<details id=" not in page
+    assert ".anchor{display:block;scroll-margin-top:3em}" in page  # summary stays in view
 
 
 def test_latest_healthcheck_results(make_config):
@@ -624,4 +641,4 @@ def test_fixable_history(make_config):
 
     db = host_details(page, "db01")
     assert "1 stored scan, 2026-11-02 06:00 UTC" in db and "<polyline" not in db
-    assert '<details id="new01">' not in page  # never scanned: no section, no chart
+    assert 'id="new01"' not in page  # never scanned: no section, no chart

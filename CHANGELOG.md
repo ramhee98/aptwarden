@@ -14,6 +14,8 @@ commits.
 - The trend chart is smaller: a step line no longer repeats a point when a value is
   unchanged, and coordinates have one decimal at most. It looks the same.
 - Table headers carry `scope="col"` for screen readers.
+- Links to a host open its collapsed details instead of only scrolling to them. Tested
+  with Chrome 156, Firefox 157, Firefox ESR 153 and WebKit 27.2.
 - Vulnerability descriptions are on the page only once, in a new **Vulnerabilities**
   section at the end with severity, CVSS, KEV, description and affected hosts. Host
   tables link their IDs there; that row links to the Debian tracker. With 40 similar

@@ -69,6 +69,7 @@ font-size:12px;white-space:nowrap}
 details{background:var(--card);border:1px solid var(--line);border-radius:8px;
 margin:8px 0;padding:8px 12px}
 summary{cursor:pointer;font-weight:600}
+.anchor{display:block;scroll-margin-top:3em}
 code{font-size:12px}
 ul{margin:4px 0;padding-left:20px}
 .trend svg{display:block;max-width:100%;height:auto;overflow:visible}
@@ -415,10 +416,14 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
                   trend: list[tuple[str, int, int, int]] | None = None) -> str:
     s = rec.summary
     fixable, others, notable = _listed(rec, min_severity)
-    parts = [f'<details id="{_e(rec.host)}"><summary>{_e(rec.host)} '
+    # The anchor is inside the section, not on <details>: following a link to an element
+    # inside a closed <details> opens it (Chrome 97, Firefox 148, Safari 26.2 and later),
+    # one on <details> itself does not. scroll-margin keeps the summary line in view.
+    parts = [f'<details class="host"><summary>{_e(rec.host)} '
              f'<span class="muted">· {_e(rec.address or "")} · Debian '
              f'{_e(s.get("debian_version", "?"))} ({_e(s.get("codename", "?"))}) · '
-             f'{len(fixable)} fixable</span></summary>']
+             f'{len(fixable)} fixable</span></summary>'
+             f'<span class="anchor" id="{_e(rec.host)}"></span>']
     if latest_error:
         parts.append(f'<p class="bad">{_e(latest_error)}</p>')
     parts += [f'<p class="warn">⚠ {_e(w)}</p>' for w in rec.warnings]

@@ -658,7 +658,10 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
 - for hosts with `patch` in `policy.modes`, in the table and in the host's details: the
   start of the next maintenance window and what it would patch (see below)
 - per host: the fixable packages, every vulnerability (collapsible: ID, severity, CVSS,
-  fixed version or status), the patch history and aptwarden's snapshots
+  fixed version or status), the patch history and aptwarden's snapshots. The details
+  of each host are collapsed; a link to a host (from the hosts table, Needs attention
+  or Vulnerabilities) opens them, in Chrome 97, Firefox 148 (ESR 153) and Safari 26.2
+  or later. Older browsers do not open them; click the host's line in Host details.
 - per host: a small chart of the fixable vulnerabilities over the stored scans (total,
   critical and high), with the period it covers; hovering a point shows its values (see
   below)
