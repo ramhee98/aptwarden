@@ -23,6 +23,21 @@ commits.
   use the last run that actually ran: a failed host that is then skipped stays listed.
   Skips neither count towards nor interrupt a streak of aborted runs. The host's patch
   history shows the skip.
+- **Vulnerabilities** names up to 6 hosts per vulnerability. With more it shows
+  `all 40 hosts`, `all 40 hosts except web07` (up to 3 named) or a collapsed list.
+  Before, a vulnerability on 40 hosts listed 40 links in its row.
+- **would patch** in the hosts table names at most 3 packages and counts the rest
+  (`openssl, curl, tar +9 more (4 critical, 11 high)`); the full list is in the tooltip
+  and in the host's details.
+- Measured with 40 similar hosts sharing 30 vulnerabilities in 12 packages: the page is
+  6% smaller (508 to 478 kB, gzip 8.3 to 8.1 kB). With 4 hosts it grows by 0.3 kB (two
+  CSS rules).
+
+### CLI
+
+- `hosts check` names the server's time zone for hosts without `timezone`:
+  `next window Sat 2026-11-07 02:00 CET (server local time, Europe/Zurich)`. Before, it
+  said only `server local time`, which hid a central host in an unexpected zone.
 
 ### Upgrade notes
 

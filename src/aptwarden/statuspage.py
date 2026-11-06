@@ -17,7 +17,7 @@ import os
 import re
 import tempfile
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -69,6 +69,8 @@ font-size:12px;white-space:nowrap}
 details{background:var(--card);border:1px solid var(--line);border-radius:8px;
 margin:8px 0;padding:8px 12px}
 summary{cursor:pointer;font-weight:600}
+details.list{background:none;border:0;margin:0;padding:0}
+details.list summary{font-weight:normal}
 .anchor{display:block;scroll-margin-top:3em}
 code{font-size:12px}
 ul{margin:4px 0;padding-left:20px}
@@ -88,6 +90,9 @@ ATTENTION_PATCH = ("needs-manual-rollback", "rollback-failed", "failed")
 REPEATED_ABORTS = 2  # consecutive aborted patch runs before they need attention
 PATCH_HISTORY = 5  # patch runs shown per host
 HEALTH_LOOKBACK = 50  # patch runs searched for the latest healthcheck results
+HOSTS_INLINE = 6  # hosts of a vulnerability listed by name; more are summarised
+HOSTS_EXCEPT = 3  # at most this many unaffected hosts named in "all N hosts except ..."
+CELL_PACKAGES = 3  # packages named in the hosts table's "would patch"; the rest counted
 # health.CheckResult as stored: "systemd nginx.service: ok (active)"; the
 # shortest check name, so a detail containing ": FAILED" stays in the detail
 _CHECK = re.compile(r"^(?P<check>.*?): (?P<state>ok|FAILED)(?: \((?P<detail>.*)\))?$", re.S)
@@ -130,10 +135,6 @@ def _when(value: str | None, tz: str | None) -> str:
 
 def _ts(value: str | None, tz: str | None) -> str:
     return _e(_when(value, tz))
-
-
-def _zone_label(tz: str | None) -> str:
-    return tz or f"server local time, {window.server_zone()}"
 
 
 def page_timezone(cfg: Config) -> str | None:
@@ -193,6 +194,7 @@ def _vulnerabilities(records: list[tuple[HostRecord, str | None]],
             found.setdefault(f.vuln_id, []).append((rec.host, f))
     if not found:
         return ""
+    page_hosts = [rec.host for rec, _ in records]
     rows = []
     for vuln_id, items in found.items():
         # the hosts' data can differ (e.g. a score only from one source): take the worst
@@ -201,7 +203,7 @@ def _vulnerabilities(records: list[tuple[HostRecord, str | None]],
         cvss = max((f.cvss_score for f in findings if f.cvss_score is not None), default=None)
         kev = any(f.kev for f in findings)
         description = next((f.description for f in findings if f.description), "")
-        hosts = ", ".join(map(_host_link, dict.fromkeys(host for host, _ in items)))
+        hosts = _hosts_cell(list(dict.fromkeys(host for host, _ in items)), page_hosts)
         score = f"{cvss:.1f}" if cvss is not None else "-"
         badge = '<span class="badge bad">KEV</span>' if kev else ""
         rows.append(((-severity, not kev, -(cvss or 0), vuln_id),  # as _risk_order
@@ -215,6 +217,22 @@ def _vulnerabilities(records: list[tuple[HostRecord, str | None]],
             '<div class="wrap"><table>'
             + _head("ID", "Severity", "CVSS", "", "Description", "Hosts")
             + "".join(row for _, row in rows) + "</table></div>")
+
+
+def _hosts_cell(hosts: list[str], page_hosts: list[str]) -> str:
+    """Up to HOSTS_INLINE hosts by name. More: "all N hosts", "all N hosts except"
+    up to HOSTS_EXCEPT named ones, or a collapsed list."""
+    if len(hosts) <= HOSTS_INLINE:
+        return ", ".join(map(_host_link, hosts))
+    affected = set(hosts)
+    others = [h for h in page_hosts if h not in affected]
+    if not others:
+        return f"all {len(page_hosts)} hosts"
+    if len(others) <= HOSTS_EXCEPT:
+        return (f"all {len(page_hosts)} hosts except "
+                + ", ".join(map(_host_link, others)))
+    return (f'<details class="list"><summary>{len(hosts)} hosts</summary>'
+            + ", ".join(map(_host_link, hosts)) + "</details>")
 
 
 def _modes_badges(host: HostConfig | None) -> str:
@@ -237,7 +255,7 @@ def _policy_line(host: HostConfig | None) -> str:
                 if snap["provider"] == "proxmox" else "none")
     items = [
         f"modes {', '.join(p['modes']) or '-'}",
-        f"window {window.describe(p['window'], _zone_label(p.get('timezone')))}",
+        f"window {window.describe(p['window'], p.get('timezone'))}",
         f"auto-patch {', '.join(p['auto_patch_severities'])}"
         + (" + KEV" if p["auto_patch_kev"] else ""),
         f"rollback {p['rollback']}", f"restart {p['restart']}", f"reboot {p['reboot']}",
@@ -255,6 +273,15 @@ class NextPatch:
     when: str  # start of the next window, in the host's time zone
     items: list[planner.PlanItem]
     summary: str  # e.g. "openssl, inetutils (2 critical, 1 high)"
+    names: list[str] = field(default_factory=list)  # packages it would patch
+    counts: str = ""  # e.g. "2 critical, 1 high"
+
+    def short(self) -> str:
+        """The summary with at most CELL_PACKAGES package names."""
+        if len(self.names) <= CELL_PACKAGES:
+            return self.summary
+        return (", ".join(self.names[:CELL_PACKAGES])
+                + f" +{len(self.names) - CELL_PACKAGES} more ({self.counts})")
 
 
 def _next_patch(rec: HostRecord, host: HostConfig | None, definitions: list[Definition],
@@ -279,9 +306,8 @@ def _next_patch(rec: HostRecord, host: HostConfig | None, definitions: list[Defi
         counts = Counter(f.severity for f in planner.select(rec.findings, p)
                          if f.source_package in active)
         names = [i.source_package for i in items if not i.skipped]
-        summary = (", ".join(names) + " ("
-                   + ", ".join(f"{n} {sev}" for sev, n in sorted(counts.items(), reverse=True))
-                   + ")")
+        text = ", ".join(f"{n} {sev}" for sev, n in sorted(counts.items(), reverse=True))
+        return NextPatch(when, items, f"{', '.join(names)} ({text})", names, text)
     return NextPatch(when, items, summary)
 
 
@@ -308,7 +334,9 @@ def _next_patch_section(nxt: NextPatch, scanned_at: str | None, tz: str | None) 
 def _next_cell(nxt: NextPatch | None) -> str:
     if nxt is None:
         return '<span class="muted">-</span>'
-    return f'{_e(nxt.when)}<br><span class="muted">would patch: {_e(nxt.summary)}</span>'
+    short = nxt.short()
+    title = f' title="{_e(nxt.summary)}"' if short != nxt.summary else ""
+    return (f'{_e(nxt.when)}<br><span class="muted"{title}>would patch: {_e(short)}</span>')
 
 
 TREND_W, TREND_H, TREND_PAD = 300, 56, 4
@@ -731,7 +759,7 @@ def render(cfg: Config, state: State, now: datetime | None = None,
 </head>
 <body><main>
 <h1>aptwarden status</h1>
-<p class="muted">generated {_e(_local(now, tz))} · times in {_e(_zone_label(tz))} ·
+<p class="muted">generated {_e(_local(now, tz))} · times in {_e(window.zone_label(tz))} ·
 aptwarden {_e(__version__)}
 {f"· latest run {_e(last_run)}" if last_run else ""}</p>
 <div class="tiles">{tiles}</div>

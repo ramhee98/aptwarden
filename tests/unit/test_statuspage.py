@@ -685,3 +685,53 @@ def test_aborted_streak_beyond_the_shown_history():
     assert statuspage._aborted_streak([skipped, aborted, skipped, aborted, aborted]) == (3, True)
     assert statuspage._aborted_streak([aborted, aborted, {"status": "patched"}]) == (2, False)
     assert statuspage._aborted_streak([aborted, skipped]) == (1, False)
+
+
+def test_hosts_cell_summarises_many_hosts():
+    page = [f"h{i:02}" for i in range(10)]
+    link = '<a href="#h00">h00</a>'
+    assert statuspage._hosts_cell(page[:6], page) == ", ".join(
+        f'<a href="#{h}">{h}</a>' for h in page[:6])  # up to HOSTS_INLINE by name
+    assert statuspage._hosts_cell(page, page) == "all 10 hosts"
+    assert statuspage._hosts_cell(page[1:], page) == f"all 10 hosts except {link}"
+    assert statuspage._hosts_cell(page[3:], page) == (
+        'all 10 hosts except <a href="#h00">h00</a>, <a href="#h01">h01</a>, '
+        '<a href="#h02">h02</a>')
+    collapsed = statuspage._hosts_cell(page[:6] + page[9:], page + ["h10"])  # 4 left out
+    assert collapsed.startswith(
+        '<details class="list"><summary>7 hosts</summary><a href="#h00">h00</a>, ')
+    assert collapsed.endswith('<a href="#h05">h05</a>, <a href="#h09">h09</a></details>')
+    # the same everywhere a vulnerability's hosts are needed: two hosts stay named
+    assert statuspage._hosts_cell(page[:2], page[:2]) == (
+        '<a href="#h00">h00</a>, <a href="#h01">h01</a>')
+
+
+def test_vulnerabilities_on_many_hosts(make_config):
+    names = [f"web{i:02}" for i in range(8)]
+    cfg = make_config(hosts=[{"name": n} for n in names])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    everywhere = Finding("CVE-2026-1", "openssl", "3.5.1-1", FindingStatus.FIXABLE,
+                         fixed_version="3.5.7-1", severity=Severity.HIGH)
+    for n in names:
+        save_scan(state, n, [everywhere] + ([] if n == "web07" else [dataclasses.replace(
+            everywhere, vuln_id="CVE-2026-2")]))
+    page = statuspage.render(cfg, state)
+    state.close()
+    vulns = page.split("<h2>Vulnerabilities</h2>")[1]
+    row = vulns.split('id="v-CVE-2026-1"')[1].split("</tr>")[0]
+    assert row.endswith("<td>all 8 hosts</td>")
+    row = vulns.split('id="v-CVE-2026-2"')[1].split("</tr>")[0]
+    assert row.endswith('<td>all 8 hosts except <a href="#web07">web07</a></td>')
+
+
+def test_would_patch_cell_names_few_packages():
+    nxt = statuspage.NextPatch("open now", [], "a, b, c, d, e (2 critical, 3 high)",
+                               ["a", "b", "c", "d", "e"], "2 critical, 3 high")
+    assert nxt.short() == "a, b, c +2 more (2 critical, 3 high)"
+    assert statuspage._next_cell(nxt) == (
+        'open now<br><span class="muted" title="a, b, c, d, e (2 critical, 3 high)">'
+        "would patch: a, b, c +2 more (2 critical, 3 high)</span>")
+    three = statuspage.NextPatch("any time", [], "a, b, c (1 high)", ["a", "b", "c"], "1 high")
+    assert statuspage._next_cell(three) == (
+        'any time<br><span class="muted">would patch: a, b, c (1 high)</span>')

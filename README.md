@@ -593,7 +593,8 @@ LXC is often UTC, so set it explicitly. Daylight saving time is handled:
   twice. The second pass finds nothing left to do.
 
 `hosts check` shows the next window of every patch host in its time zone, and the status
-page shows the windows with their time zone.
+page shows the windows with their time zone. Without `timezone`, both name the server's
+zone: `(server local time, Europe/Zurich)`, from `$TZ` or `/etc/localtime`.
 
 The patch timer runs hourly. Each host is only patched inside its window:
 
@@ -702,6 +703,8 @@ tracker. The host tables and the Needs attention block show no descriptions: the
 vulnerability IDs link to this row instead, so a description shared by many hosts is
 on the page only once. Where the hosts' data differ, the row shows the highest severity
 and score. The section is not collapsible, so these links always land on the row.
+Up to 6 hosts are named; with more, the cell reads `all 40 hosts`, `all 40 hosts except
+web07` (up to 3 named) or a collapsed list such as `12 hosts`.
 
 The page is always rendered from the stored state of every configured host, so a patch
 run of one host does not hide the others. It has no JavaScript and no forms. A
@@ -735,7 +738,10 @@ scan: `auto_patch_severities`, `auto_patch_kev`, definitions restricting a vulne
 to `report`, and `block` definitions covering the fixed version (listed as held back). It
 reads only `state.db`, with no SSH connection and no apt simulation, so the patch run can
 still hold back a package once it sees the apt candidates (mirror behind, blocked
-candidate). Changes after the last scan appear with the next report run.
+candidate). Changes after the last scan appear with the next report run. In the hosts
+table, a preview of more than 3 packages names the first 3 and counts the rest, e.g.
+`openssl, curl, tar +9 more (4 critical, 11 high)`; hovering shows the full list, and the
+host's details list every package.
 
 **Fixable over time** is an inline SVG, so it needs no script and no external resource;
 its colours follow the light or dark theme. Failed scans are left out. The chart shows

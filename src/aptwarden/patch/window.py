@@ -149,6 +149,10 @@ def server_zone() -> str:
     return name or datetime.now().astimezone().tzname() or "unknown"
 
 
+def zone_label(tz: str | None) -> str:
+    """``tz``, or which zone "server local time" is: server local time, Europe/Zurich."""
+    return tz or f"server local time, {server_zone()}"
+
+
 def describe(windows: list[str] | None, tz: str | None) -> str:
-    where = tz or "server local time"
-    return f"{', '.join(windows)} ({where})" if windows else "any time"
+    return f"{', '.join(windows)} ({zone_label(tz)})" if windows else "any time"

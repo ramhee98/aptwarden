@@ -253,3 +253,30 @@ def test_ownership_guard(tmp_path, monkeypatch, capsys):
     assert cli.main(["-c", str(config_file), "status"]) == 2
     assert "owned by aptwarden" in capsys.readouterr().err
     assert cli.main(["-c", str(config_file), "config", "check"]) == 0
+
+
+def test_hosts_check_names_the_time_zone(make_config, monkeypatch):
+    class Down:
+        def run(self, *a, **kw):
+            raise TransportError("ssh: timed out")
+
+        def close(self):
+            pass
+
+    class Factory:
+        def create(self, host):
+            return Down()
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setattr("aptwarden.transport.TransportFactory", Factory)
+    policy = {"modes": ["patch"], "window": ["Sat 02:00-03:00"],
+              "allow_without_snapshot": True}
+    cfg = make_config(hosts=[{"name": "web01", "policy": policy},
+                             {"name": "ny01", "policy": {**policy,
+                                                          "timezone": "America/New_York"}}])
+    server, ny = (cli._patch_readiness(h, cfg) for h in cfg.hosts)
+    # tests/conftest.py sets TZ=Asia/Kolkata
+    assert any(n.endswith("(server local time, Asia/Kolkata)") for n in server), server
+    assert any(n.endswith("(America/New_York)") for n in ny), ny

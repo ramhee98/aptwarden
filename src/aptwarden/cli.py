@@ -235,7 +235,7 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
 
         tz = h.policy.get("timezone")
         nxt = window.next_open(h.policy["window"], tz=tz)
-        label = tz or "server local time"
+        label = window.zone_label(tz)
         if nxt is None:
             notes.append("window: any time")
         elif nxt[1]:
