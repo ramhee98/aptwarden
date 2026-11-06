@@ -132,6 +132,16 @@ class HostPatchResult:
         return asdict(self)
 
 
+def save_result(state: State, result: HostPatchResult) -> None:
+    """Store a patch result in the history. ``repeated`` compares with the host's
+    last run that actually ran: a skip in between does not make an abort new."""
+    previous = state.patches(result.host, 1, skipped=result.status == "skipped")
+    result.repeated = bool(previous) and previous[0]["status"] == result.status \
+        and previous[0]["reason"] == result.reason
+    state.save_patch(result.run_id, result.host, result.status, result.started_at,
+                     result.to_dict())
+
+
 class PatchRunner:
     def __init__(self, state: State, definitions: list[Definition], *,
                  sleep: Callable[[float], None] = time.sleep,
@@ -191,11 +201,7 @@ class PatchRunner:
                 extra={"host": host.name, "status": result.status, "stage": result.stage,
                        "reason": result.reason})
         if not dry_run:
-            previous = self.state.patches(host.name, 1)
-            result.repeated = bool(previous) and previous[0]["status"] == result.status \
-                and previous[0]["reason"] == result.reason
-            self.state.save_patch(run_id, host.name, result.status, result.started_at,
-                                  result.to_dict())
+            save_result(self.state, result)
         return result
 
     def _run(self, result: HostPatchResult, host: HostConfig, inv: HostInventory,

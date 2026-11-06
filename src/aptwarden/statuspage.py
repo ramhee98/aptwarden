@@ -489,24 +489,28 @@ def _host_link(name: str) -> str:
     return f'<a href="#{_e(name)}">{_e(name)}</a>'
 
 
-def _aborted_streak(history: list[dict]) -> int:
+def _aborted_streak(history: list[dict]) -> tuple[int, bool]:
+    """Consecutive aborted runs, newest first, and whether the streak may go on beyond
+    ``history``. Runs skipped for a failed dependency neither count nor end it."""
     n = 0
     for p in history:
+        if p.get("status") == "skipped":
+            continue
         if p.get("status") != "aborted":
-            break
+            return n, False
         n += 1
-    return n
+    return n, len(history) == PATCH_HISTORY
 
 
 def _attention_items(records: list[tuple[HostRecord, str | None]],
-                     history: dict[str, list[dict]],
+                     history: dict[str, list[dict]], last_patch: dict[str, dict],
                      tz: str | None) -> list[tuple[tuple[str, ...], str]]:
     """(hosts, html) for everything that needs a human, worst first. A known exploited
     vulnerability is one entry for all its hosts; the others are one entry per host."""
     failed, scans, aborts = [], [], []
     kev: dict[tuple[str, str], list[tuple[str, Finding]]] = {}
     for rec, error in records:
-        latest = (history[rec.host] or [{}])[0]
+        latest = last_patch[rec.host]
         link = _host_link(rec.host)
         if latest.get("status") in ATTENTION_PATCH:
             failed.append(((rec.host,), f"{link}: last patch run "
@@ -518,9 +522,9 @@ def _attention_items(records: list[tuple[HostRecord, str | None]],
         for f in rec.findings:
             if f.kev and f.status == FindingStatus.FIXABLE:
                 kev.setdefault((f.vuln_id, f.source_package), []).append((rec.host, f))
-        streak = _aborted_streak(history[rec.host])
+        streak, more = _aborted_streak(history[rec.host])
         if streak >= REPEATED_ABORTS:
-            more = "+" if streak == len(history[rec.host]) == PATCH_HISTORY else ""
+            more = "+" if more else ""
             aborts.append(((rec.host,), f"{link}: {_patch_badge('aborted')} "
                            f"{streak}{more} patch runs in a row · "
                            f"{_e(truncate(latest.get('reason', ''), 160))}"))
@@ -576,6 +580,7 @@ class Status:
     missing: list[str]  # configured, never scanned
     last_run: str | None
     history: dict[str, list[dict]]
+    last_patch: dict[str, dict]  # last run that ran, not skipped for a dependency; or {}
     upcoming: dict[str, NextPatch | None]
     attention: list[tuple[tuple[str, ...], str]]  # (hosts, html)
     health: dict[str, tuple[dict, str] | None]  # latest healthcheck results per host
@@ -603,14 +608,17 @@ def collect(cfg: Config, state: State, now: datetime | None = None) -> Status:
 
     by_name = {h.name: h for h in cfg.hosts}
     history = {rec.host: state.patches(rec.host, PATCH_HISTORY) for rec, _ in records}
+    last_patch = {host: next((p for p in runs if p.get("status") != "skipped"), None)
+                  or (state.patches(host, 1, skipped=False) or [{}])[0]
+                  for host, runs in history.items()}
     custom = cfg.raw["sources"].get("custom", {}).get("enabled", False)
     definitions = stored_definitions(state) if custom else []
     upcoming = {rec.host: _next_patch(rec, by_name.get(rec.host), definitions, now)
                 for rec, _ in records}
     health = {rec.host: last_health(history[rec.host])
               or last_health(state.patches(rec.host, HEALTH_LOOKBACK)) for rec, _ in records}
-    return Status(now, tz, records, scanned_at, missing, last_run, history, upcoming,
-                  _attention_items(records, history, tz), health)
+    return Status(now, tz, records, scanned_at, missing, last_run, history, last_patch,
+                  upcoming, _attention_items(records, history, last_patch, tz), health)
 
 
 def _utc(value: str | datetime | None) -> str | None:
@@ -629,7 +637,7 @@ def status_json(st: Status) -> dict:
     attention = Counter(host for hosts, _ in st.attention for host in hosts)
     hosts = []
     for rec, error in st.records:
-        patch = (st.history[rec.host] or [{}])[0]
+        patch = st.last_patch[rec.host]
         hosts.append({"name": rec.host, "scan_ok": error is None,
                       "scanned_at": _utc(st.scanned_at[rec.host]),
                       "last_patch": patch.get("status"),
@@ -659,7 +667,7 @@ def render(cfg: Config, state: State, now: datetime | None = None,
     rows = []
     for rec, error in records:
         c = _counts(rec)
-        patch = (history[rec.host] or [{}])[0]
+        patch = st.last_patch[rec.host]
         total.update(hosts=1, errors=1 if error else 0, **c)
         status = ('<span class="badge bad">scan failed</span>' if error
                   else '<span class="badge good">ok</span>')

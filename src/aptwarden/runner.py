@@ -27,6 +27,7 @@ from aptwarden.patch.runner import (
     NEEDS_SNAPSHOT_STATUSES,
     HostPatchResult,
     PatchRunner,
+    save_result,
 )
 from aptwarden.snapshot import NoSnapshots, SnapshotError, SnapshotProvider, SnapshotRef
 from aptwarden.sources import CORE_SOURCES, Source, SourceStatus, build_sources
@@ -336,6 +337,9 @@ class Runner:
                         blocked.add(h.name)
                         log.warning("patch skipped", extra={"host": h.name,
                                                             "reason": result.reason})
+                        result.finished_at = result.started_at
+                        if not dry_run:
+                            save_result(self.state, result)
                     else:
                         if severities is not None:
                             h = replace(h, policy={**h.policy,
@@ -387,7 +391,7 @@ class Runner:
             snaps = self.state.snapshots(h.name, ("active", "rolled-back"))
             if not snaps:
                 continue
-            latest_patch = (self.state.patches(h.name, 1) or [{}])[0]
+            latest_patch = (self.state.patches(h.name, 1, skipped=False) or [{}])[0]
             needed = (latest_patch.get("status") in NEEDS_SNAPSHOT_STATUSES
                       and latest_patch.get("snapshot"))
             try:

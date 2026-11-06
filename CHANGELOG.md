@@ -3,6 +3,32 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Patching
+
+- **Hosts skipped because a dependency failed are in the patch history** with status
+  `skipped` and the reason, e.g. `dependency proxy01 failed`. Before, they were only in
+  the run's report and mail, so `aptwarden patches` and the status page could not tell
+  a deliberate skip from a host the run never reached. Dry runs and hosts skipped for
+  their window or modes are still not stored.
+- A stored skip does not count as the host's last patch run. The snapshot cleanup still
+  keeps a snapshot needed for a manual rollback when a later run skipped the host
+  (without this, the skip would have released it), and an abort after a skip is still
+  recognised as repeated, so it sends no new mail.
+
+### Status page
+
+- Needs attention, the hosts table and `last_patch` / `last_patch_at` in `status.json`
+  use the last run that actually ran: a failed host that is then skipped stays listed.
+  Skips neither count towards nor interrupt a streak of aborted runs. The host's patch
+  history shows the skip.
+
+### Upgrade notes
+
+- No manual steps: configuration, helper (version 2), systemd units, the database and
+  the format of `status.json` are unchanged.
+
 ## 0.5.0 (2026-11-05)
 
 ### Status page

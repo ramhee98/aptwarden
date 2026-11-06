@@ -227,6 +227,10 @@ def test_snapshot_cleanup(make_config):
         "status": "needs-manual-rollback",
         "snapshot": {"provider": "fake", "target": "node/lxc/100", "name": "aptw_keep"}})
     assert runner.cleanup_snapshots(web) == []
+    # also when a later run skipped the host because a dependency failed
+    st.save_patch("r3", "web01", "skipped", "2026-10-23T00:00:00+00:00",
+                  {"status": "skipped", "reason": "dependency proxy01 failed"})
+    assert runner.cleanup_snapshots(web) == []
     runner.close()
 
 
@@ -489,4 +493,55 @@ def test_dry_run_shows_order_and_dependents(make_config, monkeypatch):
     assert patched == ["proxy01", "web01"]
     assert run.notes[:2] == ["patch order: proxy01, web01",
                              "web01 is skipped if proxy01 fails"]
+    runner.close()
+
+
+def test_dependency_skips_are_in_the_patch_history(make_config, monkeypatch):
+    cfg = dependency_cfg(make_config, ("web01", ["proxy01"]), ("blog01", ["web01"]),
+                         ("proxy01", []))
+    runner, _ = dependency_runner(cfg, monkeypatch, {"proxy01": "failed"})
+    runner.patch(cfg.hosts, dry_run=True, notify=False)
+    assert runner.state.patches() == []  # a dry run stores nothing
+    run = runner.patch(cfg.hosts, ignore_window=True, notify=False)
+    stored = {p["host"]: p for p in runner.state.patches()}
+    assert {h: (p["status"], p["reason"], p["run_id"]) for h, p in stored.items()} == {
+        "web01": ("skipped", "dependency proxy01 failed", run.run_id),
+        "blog01": ("skipped", "dependency web01 skipped", run.run_id)}
+    assert stored["web01"]["finished_at"] == stored["web01"]["started_at"]
+    # the history shows them, the last run that ran leaves them out
+    assert runner.state.patches("web01", 1, skipped=False) == []
+    runner.close()
+
+
+def test_window_skips_stay_out_of_the_patch_history(make_config, monkeypatch):
+    cfg = dependency_cfg(make_config, ("web01", []))
+    cfg.hosts[0].policy["window"] = ["Sat 02:00-03:00"]  # closed on a Monday noon
+    runner, _ = dependency_runner(cfg, monkeypatch, {})
+    run = runner.patch(cfg.hosts, now=datetime(2026, 10, 19, 12, 0, tzinfo=UTC),
+                       notify=False)
+    assert [p.status for p in run.patches] == ["skipped"]
+    assert runner.state.patches() == []  # every timer run outside the window would add one
+    runner.close()
+
+
+def test_a_skip_does_not_make_an_abort_new(make_config):
+    from aptwarden.patch.runner import save_result
+
+    runner = Runner(cfg_with(make_config))
+    st = runner.state
+
+    def result(run_id, status, reason, started):
+        r = HostPatchResult("web01", run_id, status=status, reason=reason)
+        r.started_at = started
+        save_result(st, r)
+        return r
+
+    assert not result("r1", "aborted", "held", "2026-10-20T02:00:00+00:00").repeated
+    skip = result("r2", "skipped", "dependency proxy01 failed", "2026-10-21T02:00:00+00:00")
+    assert not skip.repeated
+    assert result("r3", "aborted", "held", "2026-10-22T02:00:00+00:00").repeated
+    assert result("r4", "skipped", "dependency proxy01 failed",
+                  "2026-10-23T02:00:00+00:00").repeated is False  # an abort came between
+    assert [p["run_id"] for p in st.patches("web01")] == ["r4", "r3", "r2", "r1"]
+    assert [p["run_id"] for p in st.patches("web01", skipped=False)] == ["r3", "r1"]
     runner.close()

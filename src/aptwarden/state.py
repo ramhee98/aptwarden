@@ -238,10 +238,14 @@ class State:
             self.db.execute("INSERT OR REPLACE INTO patches VALUES (?, ?, ?, ?, ?)",
                             (run_id, host, status, started_at, json.dumps(data)))
 
-    def patches(self, host: str | None = None, limit: int = 20) -> list[dict]:
+    def patches(self, host: str | None = None, limit: int = 20,
+                skipped: bool = True) -> list[dict]:
+        """Newest first. ``skipped=False`` leaves out hosts skipped because a dependency
+        failed, so the result is the host's last run that actually ran."""
         return [json.loads(r[0]) for r in self.db.execute(
             "SELECT data FROM patches WHERE (? IS NULL OR host = ?) "
-            "ORDER BY started_at DESC, run_id DESC LIMIT ?", (host, host, limit))]
+            "AND (? OR status != 'skipped') "
+            "ORDER BY started_at DESC, run_id DESC LIMIT ?", (host, host, skipped, limit))]
 
     def add_snapshot(self, provider: str, target: str, name: str, host: str,
                      run_id: str) -> None:

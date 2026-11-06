@@ -642,3 +642,46 @@ def test_fixable_history(make_config):
     db = host_details(page, "db01")
     assert "1 stored scan, 2026-11-02 06:00 UTC" in db and "<polyline" not in db
     assert 'id="new01"' not in page  # never scanned: no section, no chart
+
+
+def test_dependency_skips_do_not_hide_the_last_run(make_config):
+    cfg = make_config(hosts=[{"name": n} for n in ("mail01", "app01", "web01")])
+    state = State(cfg.state_dir / "state.db")
+    dep = "dependency proxy01 failed"
+    state.start_run("r1", "report")
+    save_scan(state, "mail01")
+    save_patch(state, "p1", "mail01", "needs-manual-rollback", "2026-10-22T02:00:00+00:00",
+               "healthchecks failed")
+    save_patch(state, "p2", "mail01", "skipped", "2026-10-23T02:00:00+00:00", dep)
+    save_scan(state, "app01")  # aborted, skipped, aborted: still two aborts in a row
+    for run_id, status, day in (("a1", "aborted", 21), ("a2", "skipped", 22),
+                                ("a3", "aborted", 23)):
+        save_patch(state, run_id, "app01", status, f"2026-10-{day}T02:00:00+00:00",
+                   dep if status == "skipped" else "held")
+    save_scan(state, "web01")  # only ever skipped
+    save_patch(state, "w1", "web01", "skipped", "2026-10-23T02:00:00+00:00", dep)
+    st = statuspage.collect(cfg, state, datetime(2026, 11, 2, 6, 30, tzinfo=UTC))
+    page = statuspage.render(cfg, state, st=st)
+    state.close()
+
+    attention = page.split("<h2>Needs attention</h2>")[1].split("<h2>Hosts</h2>")[0]
+    assert "needs-manual-rollback" in attention and "healthchecks failed" in attention
+    assert "2 patch runs in a row · held" in attention
+    assert "web01" not in attention
+    details = {h["name"]: h for h in statuspage.status_json(st)["hosts_detail"]}
+    assert (details["mail01"]["last_patch"], details["mail01"]["last_patch_at"]) == (
+        "needs-manual-rollback", "2026-10-22T02:00:00Z")
+    assert details["web01"]["last_patch"] is None
+    # the host's own history lists the skip with its reason
+    mail = page.split('id="mail01"')[1].split('class="anchor"')[0]
+    history = mail.split("<h3>Patch history</h3>")[1].split("</table>")[0]
+    assert history.index("skipped") < history.index("needs-manual-rollback")
+    assert dep in history
+
+
+def test_aborted_streak_beyond_the_shown_history():
+    aborted, skipped = {"status": "aborted"}, {"status": "skipped"}
+    assert statuspage._aborted_streak([aborted] * 5) == (5, True)
+    assert statuspage._aborted_streak([skipped, aborted, skipped, aborted, aborted]) == (3, True)
+    assert statuspage._aborted_streak([aborted, aborted, {"status": "patched"}]) == (2, False)
+    assert statuspage._aborted_streak([aborted, skipped]) == (1, False)

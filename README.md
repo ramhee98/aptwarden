@@ -628,6 +628,11 @@ hosts:
   skipped with the reason `dependency proxy01 rolled-back`. They are not touched and
   cause no alert of their own; the dependency's alert covers it. This carries on to
   hosts depending on a skipped one.
+- **Patch history:** a skipped dependent is stored with status `skipped` and its reason,
+  so `aptwarden patches` and the status page show that it was left out on purpose. A
+  skip does not replace the host's last patch run: the status page, `last_patch` in
+  `status.json`, the snapshot cleanup and the check for repeated aborts all use the
+  last run that actually ran. Hosts skipped for their window or modes are not stored.
 - **Dependency not in the run:** outside its window, without `patch` in its modes or not
   selected with `--host`, it does not hold anything back; the host is patched as usual.
 - **Dry run:** `aptwarden patch --dry-run` shows the patch order and which hosts would be
@@ -649,7 +654,8 @@ After every `report` and `patch` run, aptwarden writes a static, read-only HTML 
 `/var/lib/aptwarden/www/index.html` by default. It contains:
 
 - totals, then a **Needs attention** block right below them (see below)
-- a table of all hosts (modes, fixable, critical, high, KEV, last scan, last patch),
+- a table of all hosts (modes, fixable, critical, high, KEV, last scan, last patch run
+  that ran; a skip because a dependency failed does not count),
   sorted by risk: hosts with errors first (failed scan, or a last patch run listed
   below), then by the number of fixable known exploited, critical and high
   vulnerabilities, then by name
