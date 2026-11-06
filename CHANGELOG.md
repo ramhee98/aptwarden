@@ -3,7 +3,7 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
-## Unreleased
+## 0.6.0 (2026-11-06)
 
 ### Patching
 
@@ -42,7 +42,11 @@ commits.
 ### Upgrade notes
 
 - No manual steps: configuration, helper (version 2), systemd units, the database and
-  the format of `status.json` are unchanged.
+  the format of `status.json` are unchanged. The page is rewritten by the next report.
+- `last_patch` in `status.json` behaves as before: the stored skips are left out, so it
+  still shows the host's last run that ran.
+- Hosts skipped for a failed dependency before this version are not in the history;
+  only skips from now on are stored.
 
 ## 0.5.0 (2026-11-05)
 
