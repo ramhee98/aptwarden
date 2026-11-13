@@ -3,7 +3,7 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
-## Unreleased
+## 0.8.0 (2026-11-13)
 
 ### Upgrade notes
 
