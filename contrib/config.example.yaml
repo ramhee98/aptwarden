@@ -56,6 +56,9 @@ report:
 
 notify:
   summary: always                  # always | changes | never (per-run summary)
+  patch_summary: digest            # digest: patch results go into the next report summary
+                                   # immediate: a mail after each patch run that did something
+                                   # (patch problems alert immediately either way)
   subject_prefix: "[aptwarden]"
   alert:                           # immediate alerts, once per host + vulnerability
     min_severity: critical         # new findings at or above this severity

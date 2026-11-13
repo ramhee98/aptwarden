@@ -95,6 +95,7 @@ DEFAULTS: dict = {
     "report": {"min_severity": "high", "show": "fixable"},
     "notify": {
         "summary": "always",
+        "patch_summary": "digest",
         "subject_prefix": "[aptwarden]",
         "alert": {
             "min_severity": "critical",

@@ -226,6 +226,13 @@
             "never"
           ]
         },
+        "patch_summary": {
+          "description": "Patch results: a mail after each patch run (immediate), or collected into the next report summary (digest). Patch problems alert immediately either way",
+          "enum": [
+            "immediate",
+            "digest"
+          ]
+        },
         "subject_prefix": {
           "type": "string"
         },

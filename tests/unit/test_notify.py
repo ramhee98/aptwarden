@@ -286,6 +286,64 @@ def test_compose_summary(make_config):
     assert "fixable now: 2 vulnerabilities" in msg.body  # full report appended
 
 
+def stored_patch(state, run_id, host, status, started_at, **extra):
+    data = {"host": host, "run_id": run_id, "status": status, "reason": "",
+            "started_at": started_at, "repeated": False, "items": [], **extra}
+    state.save_patch(run_id, host, status, started_at, data)
+
+
+def test_patch_digest_in_report_summary(dispatcher):
+    d, notifier, state = dispatcher  # summary: changes
+    host = ok_host("web01", [])
+    stored_patch(state, "p0", "web01", "patched", "2026-10-20T03:00:00+00:00")  # > 1 day old
+    stored_patch(state, "p1", "web01", "patched", "2026-10-22T03:05:00+00:00",
+                 unknown_field_from_a_newer_version=1)
+    stored_patch(state, "p2", "db01", "nothing-to-do", "2026-10-22T04:00:00+00:00")
+    stored_patch(state, "p3", "db01", "aborted", "2026-10-22T04:00:00+00:00", repeated=True)
+    stored_patch(state, "p4", "dns01", "skipped", "2026-10-22T04:30:00+00:00")
+
+    # nothing changed, but a patch run happened: the summary goes out
+    assert d.dispatch(run_with([host])) == []
+    [msg] = notifier.sent
+    assert msg.kind == "summary" and msg.subject.endswith(" · 1 patched")
+    assert "2026-10-22 03:05 UTC  web01: patched" in msg.body
+    # the first digest goes back one day only
+    assert "03:00" not in msg.body and "db01" not in msg.body and "dns01" not in msg.body
+
+    notifier.sent.clear()
+    d.dispatch(run_with([host]))
+    assert notifier.sent == []  # already reported, no changes
+
+    # a run that started before the last summary but was stored after it
+    stored_patch(state, "p5", "web02", "patched", "2026-10-22T09:59:00+00:00")
+    d.dispatch(run_with([host]))
+    assert "web02: patched" in notifier.sent[0].body
+
+
+def test_patch_digest_kept_when_summary_fails(dispatcher):
+    d, notifier, state = dispatcher
+    stored_patch(state, "p1", "web01", "patched", "2026-10-22T03:05:00+00:00")
+    notifier.fail = True
+    assert d.dispatch(run_with([ok_host("web01", [])]))
+    assert state.get("notify.patch_digest_position") is None
+    notifier.fail = False
+    d.dispatch(run_with([ok_host("web01", [])]))
+    assert "web01: patched" in notifier.sent[0].body
+
+
+def test_patch_run_sends_no_mail_in_digest_mode(make_config, tmp_path):
+    from aptwarden.patch.runner import HostPatchResult
+
+    for mode, expected in (("digest", []), ("immediate", ["summary"])):
+        state = State(tmp_path / f"{mode}.db")
+        notifier = FakeNotifier()
+        run = RunReport("r1", "patch", "2026-10-22T03:00:00+00:00")
+        run.patches = [HostPatchResult("web01", "r1", status="patched")]
+        Dispatcher(make_config(notify={"patch_summary": mode}), state, [notifier]).dispatch(run)
+        assert [m.kind for m in notifier.sent] == expected, mode
+        state.close()
+
+
 def test_compose_alert_none_when_nothing_to_say():
     assert compose_alert("[a]", run_with([ok_host("web01", [])]), {}, []) is None
 

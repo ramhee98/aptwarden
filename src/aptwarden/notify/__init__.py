@@ -5,6 +5,10 @@ listed in CISA KEV, for hosts that start failing, and when no vulnerability
 data is available at all. Each (host, source package, vulnerability) is
 alerted once, then again after ``remind_after``. A failed delivery is retried
 on the next run.
+
+Patch results go out after each patch run (``notify.patch_summary: immediate``)
+or are collected into the next report summary (``digest``). Patch problems are
+alerts and go out immediately either way.
 """
 
 from __future__ import annotations
@@ -12,7 +16,8 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from aptwarden import report
@@ -27,6 +32,8 @@ log = logging.getLogger(__name__)
 
 TRACKER_URL = "https://security-tracker.debian.org/tracker/"
 MAX_LISTED = 50  # findings listed per section before truncating
+DIGEST_KEY = "notify.patch_digest_position"  # the last patch result in a summary
+DIGEST_FALLBACK = timedelta(days=1)  # first summary with the digest: this far back
 
 
 class NotifyError(Exception):
@@ -130,12 +137,31 @@ def _patch_lines(p, packages: bool = False) -> list[str]:
     return lines
 
 
-def noteworthy_patches(run: RunReport) -> list:
+def _noteworthy(results: list) -> list:
     """Patch results worth a message: changes, problems, or a new reason to abort."""
     from aptwarden.patch.runner import CHANGED_STATUSES
 
-    return [p for p in run.patches if p.status in CHANGED_STATUSES
+    return [p for p in results if p.status in CHANGED_STATUSES
             or (p.status == "aborted" and not p.repeated)]
+
+
+def noteworthy_patches(run: RunReport) -> list:
+    return _noteworthy(run.patches)
+
+
+def digest_patches(state: State, now: str) -> tuple[list, int]:
+    """Noteworthy patch results not yet in a summary, oldest first, and the position
+    to store once the summary is sent."""
+    from aptwarden.patch.runner import HostPatchResult
+
+    position = state.get(DIGEST_KEY)
+    stored, newest = state.patches_stored_after(position or 0)
+    if position is None:
+        floor = (datetime.fromisoformat(now) - DIGEST_FALLBACK).isoformat(timespec="seconds")
+        stored = [d for d in stored if d["started_at"] >= floor]
+    known = {f.name for f in fields(HostPatchResult)}
+    results = [HostPatchResult(**{k: v for k, v in d.items() if k in known}) for d in stored]
+    return _noteworthy(results), newest
 
 
 def compose_patch_summary(prefix: str, run: RunReport) -> Message:
@@ -198,7 +224,9 @@ def compose_alert(prefix: str, run: RunReport, alerts: dict[str, list[Finding]],
     return Message("alert", f"{prefix} ALERT: {'; '.join(parts)}", "\n".join(lines))
 
 
-def compose_summary(prefix: str, run: RunReport, cfg: Config) -> Message:
+def compose_summary(prefix: str, run: RunReport, cfg: Config,
+                    patches: list | None = None) -> Message:
+    """``patches``: patch results since the last summary (digest mode)."""
     min_severity = Severity.parse(cfg.report["min_severity"])
     rows = [["HOST", "FIXABLE", "CRITICAL", "HIGH", "KEV", "NEW", "RESOLVED"]]
     totals: Counter = Counter()
@@ -221,6 +249,9 @@ def compose_summary(prefix: str, run: RunReport, cfg: Config) -> Message:
     problem = "PROBLEM: " if run.status != "ok" else ""
     subject = (f"{prefix} {problem}{len(run.hosts)} hosts · {totals['fixable']} fixable "
                f"({totals['critical']} critical, {totals['kev']} KEV) · {totals['new']} new")
+    if patches:
+        counts = Counter(p.status for p in patches)
+        subject += " · " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
     lines = [f"aptwarden summary · run {run.run_id} · status {run.status}", ""]
     lines += report.format_table(rows, indent="")
     for h in errors:
@@ -248,6 +279,12 @@ def compose_summary(prefix: str, run: RunReport, cfg: Config) -> Message:
         lines += ["", "New since the last scan (fixable or above threshold):"] + new_lines
     if resolved_lines:
         lines += ["", "Resolved since the last scan:"] + resolved_lines
+    if patches:
+        lines += ["", "Patch runs since the last summary:"]
+        for p in patches:
+            when = p.started_at[:16].replace("T", " ")
+            patch_lines = _patch_lines(p)
+            lines += [f"  {when} UTC  {patch_lines[0]}"] + ["  " + x for x in patch_lines[1:]]
 
     lines += ["", "-" * 72, ""]
     lines.append(report.render_text(run.hosts, run.sources, min_severity=min_severity,
@@ -304,14 +341,23 @@ class Dispatcher:
                 for host, findings in alerts.items():
                     self.state.mark_alerted(host, findings)
 
+        policy = ncfg["summary"]
+        digest = ncfg["patch_summary"] == "digest"
         if run.command.startswith("patch"):
-            # Patch runs are frequent (timer): report only what happened.
-            if noteworthy_patches(run) and ncfg["summary"] != "never":
+            # Patch runs are frequent (timer): report only what happened, or leave
+            # it to the next report summary.
+            if noteworthy_patches(run) and policy != "never" and not digest:
                 errors += self.send(compose_patch_summary(prefix, run))
             return errors
-        policy = ncfg["summary"]
+        patches, position = digest_patches(self.state, run.started_at) if digest else ([], 0)
         changed = any(c.changed for c in run.changes.values())
-        if policy == "always" or (policy == "changes" and (changed or alert is not None
+        if policy == "always" or (policy == "changes" and (changed or patches
+                                                           or alert is not None
                                                            or run.status != "ok")):
-            errors += self.send(compose_summary(prefix, run, self.cfg))
+            summary_errors = self.send(compose_summary(prefix, run, self.cfg, patches))
+            errors += summary_errors
+            if summary_errors:
+                return errors
+        if digest and policy != "never":
+            self.state.set(**{DIGEST_KEY: position})
         return errors

@@ -3,6 +3,22 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Notifications
+
+- **Patch results go into the morning report by default** (`notify.patch_summary:
+  digest`). The hourly patch timer sent a mail after every run that patched something,
+  so hosts with maintenance windows spread over the night caused one mail per window.
+  Now the next report summary lists the patch runs since the previous summary under
+  **Patch runs since the last summary** and counts them in its subject
+  (`· 3 patched`). With `summary: changes` a summary goes out when there is a patch run
+  to report, even if no vulnerability changed.
+- Patch problems (rolled back, failed, manual rollback needed) still send an immediate
+  alert. `patch_summary: immediate` restores the previous behaviour.
+- A patch run still in progress when the report runs is listed in the following summary,
+  and a summary that could not be delivered keeps its patch runs for the next one.
+
 ## 0.6.0 (2026-11-06)
 
 ### Patching

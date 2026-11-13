@@ -247,6 +247,14 @@ class State:
             "AND (? OR status != 'skipped') "
             "ORDER BY started_at DESC, run_id DESC LIMIT ?", (host, host, skipped, limit))]
 
+    def patches_stored_after(self, position: int) -> tuple[list[dict], int]:
+        """Patch results stored after ``position`` (oldest first) and the position of the
+        newest one. Results are stored when a host is done, so a run that started before
+        the last call but finished after it is still returned."""
+        rows = self.db.execute("SELECT rowid, data FROM patches WHERE rowid > ? "
+                               "ORDER BY started_at, rowid", (position,)).fetchall()
+        return [json.loads(r[1]) for r in rows], max((r[0] for r in rows), default=position)
+
     def add_snapshot(self, provider: str, target: str, name: str, host: str,
                      run_id: str) -> None:
         with self.db:

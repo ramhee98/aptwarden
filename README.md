@@ -292,6 +292,10 @@ last scan, followed by the full report. An immediate alert goes out for:
 Each host and vulnerability is alerted once, with a reminder after `remind_after`. A
 failed delivery is retried on the next run and marks the run as `partial`.
 
+Patch results go into the next summary by default, so hosts patched in different
+windows overnight cause one mail in the morning, not one per window (see
+`notify.patch_summary` under [Patching](#patching)).
+
 ```yaml
 notify:
   email:
@@ -606,8 +610,12 @@ systemctl enable --now aptwarden-patch.timer
 
 Mails from patch runs:
 
-- a patch summary when something was patched, or when a run aborted for a new reason
-- an immediate alert for anything that needs a human
+- an immediate alert for anything that needs a human (rolled back, failed, ...)
+- what was patched, or a run that aborted for a new reason: by default
+  (`notify.patch_summary: digest`) collected into the next report summary, under
+  **Patch runs since the last summary**, with the count in its subject. With
+  `patch_summary: immediate` each patch run that did something sends its own mail
+  instead, which means one mail per maintenance window.
 
 Quiet hours cause no mail.
 
