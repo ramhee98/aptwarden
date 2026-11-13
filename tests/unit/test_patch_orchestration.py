@@ -340,6 +340,12 @@ def tls_server(tmp_path):
         def do_GET(self):
             seen["auth"] = self.headers.get("Authorization")
             body = json.dumps({"data": {"version": "9.2.11"}}).encode()
+            if self.path.endswith("/html"):  # a proxy's error page instead of the API
+                body = b"<html>maintenance</html>"
+            elif self.path.endswith("/list"):
+                body = b"[1, 2]"
+            elif "/tasks/odd/" in self.path:
+                body = b'{"data": "running"}'
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -371,6 +377,43 @@ def test_proxmox_client_pins_certificate(tls_server, tmp_path):
     unpinned = ProxmoxClient({**settings, "tls_fingerprint": None}, tmp_path)
     with pytest.raises(SnapshotError, match="CERTIFICATE_VERIFY_FAILED"):
         unpinned.request("GET", "/version")  # self-signed, no CA, no pin: refused
+
+
+def test_proxmox_client_turns_odd_answers_into_snapshot_errors(tls_server, tmp_path):
+    url, fp, _ = tls_server
+    (tmp_path / "token").write_text("t\n")
+    client = ProxmoxClient({"url": url, "token_id": "aptwarden@pam!t", "token_file": "token",
+                            "tls_fingerprint": fp}, tmp_path)
+    with pytest.raises(SnapshotError, match="not JSON"):
+        client.request("GET", "/html")
+    with pytest.raises(SnapshotError, match="unexpected response"):
+        client.request("GET", "/list")
+    with pytest.raises(SnapshotError, match="no task id"):
+        client.wait_task("pve", None)
+    with pytest.raises(SnapshotError, match="unexpected status response"):
+        client.wait_task("pve", "odd", timeout=1)
+
+
+def test_a_crashing_host_does_not_stop_the_patch_run(make_config, monkeypatch):
+    cfg = dependency_cfg(make_config, ("a", []), ("b", ["a"]), ("c", []))
+    runner, patched = dependency_runner(cfg, monkeypatch, {})
+    real = runner._patch_runner.run
+
+    def run(host, *args, **kw):
+        if host.name == "a":
+            raise RuntimeError("database is locked")
+        return real(host, *args, **kw)
+
+    monkeypatch.setattr(runner._patch_runner, "run", run)
+    report = runner.patch(cfg.hosts, ignore_window=True, notify=False)
+    by_host = {p.host: p for p in report.patches}
+    assert by_host["a"].status == "failed" and by_host["a"].alert
+    assert "unexpected error: RuntimeError: database is locked" in by_host["a"].reason
+    assert by_host["b"].status == "skipped" and by_host["b"].reason == "dependency a failed"
+    assert by_host["c"].status == "patched" and patched == ["c"]
+    assert report.status == "partial"
+    assert runner.state.patches("a")[0]["status"] == "failed"
+    runner.close()
 
 
 def test_cli_severity_override_maps_and_leaves_config_alone(make_config, tmp_path, monkeypatch):

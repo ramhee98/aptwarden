@@ -3,6 +3,36 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Upgrade notes
+
+- **Reinstall the helper on every patch host** (`aptwarden helper show --install`, see
+  the README, "Target hosts: helper and sudo"). The helper is now version 3; until it is
+  updated, patch runs abort on that host with `outdated helper` and change nothing.
+
+### Patching
+
+- **`restart: auto` restarts services again.** The helper ran `needrestart -r a -b`, and
+  needrestart's batch mode only lists services: nothing was ever restarted, while the
+  patch result said `restarted: …`. Patched hosts kept running the old library code
+  until someone restarted the services. The helper now restarts without batch mode and
+  asks needrestart again afterwards. `restarted` lists only what really was restarted;
+  services needrestart left alone (e.g. dbus) or that still need a restart are in a note
+  of the result. Hosts patched by earlier versions may still run old code: check them
+  with `needrestart` or reboot them.
+- **An unexpected error no longer skips the rollback.** The patch pipeline only handled
+  its own error types. Anything else, e.g. an HTTP healthcheck against a service that
+  died mid-response after the update (`http.client.IncompleteRead`), ended the whole
+  patch run with a traceback: the host stayed patched without a rollback, nothing was
+  stored, no alert was sent and the remaining hosts were not patched. Now a healthcheck
+  that cannot be carried out is a failed check, and any error in the pipeline is handled
+  like a failure of its stage: aborted before the snapshot, rolled back (or `failed` /
+  `needs-manual-rollback`) after it, `rollback-failed` if the rollback itself crashes.
+  The run continues with the next host.
+- The Proxmox client reports a response that is not the expected JSON, or a missing task
+  id, as a snapshot error instead of crashing.
+
 ## 0.7.0 (2026-11-13)
 
 ### Notifications

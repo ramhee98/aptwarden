@@ -92,7 +92,7 @@ def allowed_extras(sim: Simulation, planned: dict[str, str]) -> list[str]:
 
 
 def parse_needrestart(text: str) -> tuple[list[str], bool]:
-    """``needrestart -b`` -> (services needing or getting a restart, reboot needed)."""
+    """``needrestart -b`` -> (services needing a restart, reboot needed)."""
     services, reboot = [], False
     for line in text.splitlines():
         key, _, value = line.partition(":")
@@ -102,3 +102,14 @@ def parse_needrestart(text: str) -> tuple[list[str], bool]:
         elif key == "NEEDRESTART-KSTA" and value in ("2", "3"):
             reboot = True  # 2: ABI compatible upgrade pending, 3: version upgrade pending
     return services, reboot
+
+
+_PENDING = "APTWARDEN-PENDING:"
+
+
+def parse_pending_restarts(text: str) -> list[str]:
+    """Helper ``needrestart restart`` -> services that still need a restart after
+    needrestart ran: it deferred or refused them, or their restart failed."""
+    names = (line[len(_PENDING):].strip() for line in text.splitlines()
+             if line.startswith(_PENDING))
+    return [n for n in names if n]

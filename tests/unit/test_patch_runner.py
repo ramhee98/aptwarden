@@ -29,6 +29,7 @@ class Host:
     install_refused: bool = False
     extra_sim: str = ""
     needrestart: str | None = "NEEDRESTART-SVC: ssh.service\n"
+    pending: str = ""  # what the helper prints after "needrestart restart"
     reboot_required: bool = False
     boots: int = 0
     calls: list[list[str]] = field(default_factory=list)
@@ -54,7 +55,7 @@ class ScriptedTransport(Transport):
             if not h.helper_ok:
                 return ok(rc=1, err="sudo: a password is required")
             if cmd == "version":
-                return ok("aptwarden-helper 2\n")
+                return ok("aptwarden-helper 3\n")
             if cmd == "update":
                 return ok()
             if cmd == "simulate":
@@ -78,7 +79,9 @@ class ScriptedTransport(Transport):
                     h.healthy = False
                 return ok()
             if cmd == "needrestart":
-                return ok(rc=3) if h.needrestart is None else ok(h.needrestart)
+                if h.needrestart is None:
+                    return ok(rc=3)
+                return ok(h.needrestart + (h.pending if args == ["restart"] else ""))
             if cmd == "reboot":
                 h.boots += 1
                 h.reboot_required = False
@@ -405,6 +408,105 @@ def test_needrestart_missing_and_list_mode(state):
     assert not helper_calls(h, "needrestart")
 
 
+def test_restarted_lists_only_what_needrestart_restarted(state):
+    # batch mode only lists, so the helper lists again after the restart: what is still
+    # there (deferred by needrestart, or the restart failed) was not restarted
+    h = openssl_host(needrestart="NEEDRESTART-SVC: ssh.service\nNEEDRESTART-SVC: dbus.service\n",
+                     pending="APTWARDEN-PENDING: dbus.service\n")
+    result, _ = run(state, h)
+    assert result.status == "patched" and result.restarted == ["ssh.service"]
+    assert any(n.startswith("services still need a restart") and n.endswith(": dbus.service")
+               for n in result.notes)
+    assert helper_calls(h, "needrestart")[0][-1] == "restart"
+    result, _ = run(state, openssl_host())
+    assert result.restarted == ["ssh.service"]
+    assert not any("still need a restart" in n for n in result.notes)
+
+
+def test_unexpected_error_after_install_rolls_back(state, monkeypatch):
+    # anything but the expected error types used to escape run(): no rollback, no stored
+    # result, no alert, and the rest of the patch run was lost
+    def boom(self, result, host, t):
+        raise KeyError("surprise")
+
+    monkeypatch.setattr(PatchRunner, "_restart", boom)
+    h = openssl_host()
+    result, provider = run(state, h)
+    assert result.status == "rolled-back" and result.alert
+    assert "restart: unexpected error: KeyError: 'surprise'" in result.reason
+    assert h.installed["openssl"] == "3.5.1-1" and len(provider.rolled_back) == 1
+    assert state.patches("web01")[0]["status"] == "rolled-back"
+
+    result, _ = run(state, openssl_host(), provider=NoSnapshots(),
+                    cfg=host_config({"allow_without_snapshot": True}))
+    assert result.status == "failed" and "unexpected error" in result.reason
+
+
+def test_unexpected_error_before_the_snapshot_aborts(state, monkeypatch):
+    from aptwarden.patch import planner
+
+    def boom(*a, **kw):
+        raise ValueError("odd apt output")
+
+    monkeypatch.setattr(planner, "resolve", boom)
+    h = openssl_host()
+    result, provider = run(state, h)
+    assert result.status == "aborted" and not result.alert
+    assert result.reason == "plan: unexpected error: ValueError: odd apt output"
+    assert not provider.snaps and not helper_calls(h, "install")
+    assert state.patches("web01")[0]["status"] == "aborted"
+
+
+def test_crashing_rollback_is_stored_as_failed_rollback(state):
+    class Broken(FakeProvider):
+        def rollback(self, ref):
+            raise ValueError("not JSON")
+
+    h = openssl_host(healthy_after_install=False)
+    result, _ = run(state, h, provider=Broken(h))
+    assert result.status == "rollback-failed" and result.alert
+    assert "rollback failed: unexpected error: ValueError: not JSON" in result.reason
+    assert state.patches("web01")[0]["status"] == "rollback-failed"
+    out = PatchRunner(state, [], sleep=lambda s: None).manual_rollback(
+        host_config(), ScriptedTransport(h), Broken(h),
+        SnapshotRef(**result.snapshot), "r2")
+    assert out.status == "rollback-failed" and "ValueError: not JSON" in out.reason
+
+
+def test_healthcheck_that_raises_counts_as_failed(state):
+    """A service that dies mid-response after the update makes http.client raise
+    IncompleteRead, which is no OSError. The check must fail and trigger the rollback."""
+    import socket
+    import threading
+
+    h = openssl_host()
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+
+    def serve():
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            conn.recv(4096)
+            patched = h.installed["openssl"] != "3.5.1-1"
+            conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nabc"
+                         if patched else b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        cfg = host_config(healthchecks=[{"http": f"http://127.0.0.1:{server.getsockname()[1]}/"}])
+        result, provider = run(state, h, cfg=cfg)
+    finally:
+        server.close()
+    assert result.status == "rolled-back", result.reason
+    assert "healthchecks failed" in result.reason and "IncompleteRead" in result.reason
+    assert h.installed["openssl"] == "3.5.1-1" and len(provider.rolled_back) == 1
+
+
 def test_repeated_results_are_flagged(state):
     h = openssl_host(healthy=False)
     first, _ = run(state, h)
@@ -424,8 +526,8 @@ def test_manual_rollback(state):
 
 # real messages captured from a Debian 13 host
 @pytest.mark.parametrize("stdout, stderr, expected", [
-    ("aptwarden-helper 2\n", "", None),
-    ("aptwarden-helper 1\n", "", "outdated helper (aptwarden-helper 1, expected version 2)"),
+    ("aptwarden-helper 3\n", "", None),
+    ("aptwarden-helper 2\n", "", "outdated helper (aptwarden-helper 2, expected version 3)"),
     ("", "env: ‘sudo’: No such file or directory", "sudo is not installed"),
     ("", "sudo: a password is required", "no sudo rule for the helper"),
     ("", f"sudo: {HELPER}: command not found", "the helper is not installed at"),

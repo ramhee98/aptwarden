@@ -148,11 +148,17 @@ plan → preflight → simulate → snapshot → apply → restart → healthche
    ends the run as `aborted` without a rollback, since nothing changed; the unused
    snapshot is removed by the normal cleanup. A dpkg version check follows.
 6. **restart:** needrestart `auto` (helper `needrestart restart`), `list` or `off`.
+   needrestart's batch mode (`-b`) only lists services and never restarts them, so the
+   helper lists (`-r l -b`), restarts without batch mode (`-r a -l`) and lists again.
+   What is still listed is printed as `APTWARDEN-PENDING: <unit>`; only the other
+   services count as restarted, the pending ones become a note of the result.
    With `reboot: if-required`, the host reboots when `/run/reboot-required` exists or
    needrestart reports a pending kernel. aptwarden waits until the boot marker changes.
    The marker is the kernel boot id plus the start time of PID 1, so it also works for
    LXC, which shares the host kernel.
-7. **healthcheck:** after `health.grace`, retried `health.retries` times.
+7. **healthcheck:** after `health.grace`, retried `health.retries` times. A check never
+   raises: whatever goes wrong while checking (e.g. a service that answers garbage or
+   dies mid-response) is a failed check.
 8. **rollback:** Proxmox rollback with `start=1`. For a running LXC this takes about
    3 s, because Proxmox stops and restarts the container itself. aptwarden then waits
    for the host and runs the healthchecks again. With `rollback: manual` it only
@@ -161,6 +167,14 @@ plan → preflight → simulate → snapshot → apply → restart → healthche
    recorded snapshots (active or rolled back) older than `snapshots.keep` are deleted.
    A snapshot still needed for a rollback (`needs-manual-rollback`, `failed`,
    `rollback-failed`) is kept.
+
+**Unexpected errors:** an error the pipeline does not know (a bug, an answer nobody
+expected) is handled like any other failure of the stage it happened in: before the
+snapshot the run is `aborted`, afterwards it is rolled back or ends as `failed` /
+`needs-manual-rollback`, and a rollback that crashes is `rollback-failed`. The result is
+stored and alerted either way, and the patch run goes on with the next host. If even
+that fails (e.g. the result cannot be stored), the host is reported as `failed` with
+"the state of the host is unknown".
 
 **Statuses:** `patched`, `rolled-back`, `needs-manual-rollback`, `failed`,
 `rollback-failed`, `aborted` (nothing changed), `nothing-to-do`, `skipped`,

@@ -39,6 +39,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from aptwarden.log import safe
 from aptwarden.transport import Transport, TransportError
 
 log = logging.getLogger(__name__)
@@ -113,6 +114,13 @@ def run_check(check: dict, transport: Transport) -> CheckResult:
         return CheckResult(name, False, str(e))
     except OSError as e:
         return CheckResult(name, False, str(e))
+    except Exception as e:  # noqa: BLE001 - a check fails, it never raises
+        # e.g. http.client.BadStatusLine or IncompleteRead from a service that answers
+        # garbage or dies mid-response: exactly what a check after an update must catch.
+        # Raising here would skip the rollback that a failed check triggers.
+        log.warning("healthcheck raised", extra={"host": getattr(transport, "host", None),
+                                                 "check": name, "error": repr(e)})
+        return CheckResult(name, False, safe(f"{type(e).__name__}: {e}"))
     return CheckResult(name, False, "unknown check type")
 
 

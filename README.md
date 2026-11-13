@@ -336,7 +336,7 @@ Patching is opt-in per host. Every configured host is always included in reports
 | simulate | `apt-get -s` with exactly the planned `package=version`s. Any removal, new package or upgrade outside the plan stops the run (`allow_new_packages`, `allow_extra_upgrades`). | `aborted` |
 | snapshot | Proxmox snapshot `aptw_<run-id>`, without RAM state by default | `aborted` |
 | apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg. The helper simulates again right before and refuses to install anything it was not given as `package=version`, or to remove anything. Extras allowed by the policy are passed explicitly. | rollback |
-| restart | needrestart `auto` / `list` / `off`; reboot `never` / `if-required` | rollback |
+| restart | needrestart `auto` (restart the services, then check which ones still need it) / `list` / `off`; reboot `never` / `if-required` | rollback |
 | healthcheck | systemd units on the host; HTTP and TCP from the central host or, with `on_host`, on the host itself; with grace period and retries | rollback, or alert only with `rollback: manual` |
 
 The result is one of these statuses:
@@ -346,7 +346,7 @@ The result is one of these statuses:
 | `patched` | upgraded and healthy | no (patch summary mail) |
 | `rolled-back` | failed, rolled back to the snapshot | **yes** |
 | `needs-manual-rollback` | failed, `rollback: manual`; run `aptwarden rollback --host …` | **yes** |
-| `failed` | failed without a snapshot to roll back to | **yes** |
+| `failed` | failed without a snapshot to roll back to, or the run crashed and the state of the host is unknown | **yes** |
 | `rollback-failed` | the rollback itself failed | **yes** |
 | `aborted` | stopped before any change | mail only if the reason is new |
 | `nothing-to-do`, `skipped`, `dry-run` | nothing changed | no |
@@ -404,6 +404,13 @@ needrestart needs no configuration. During a patch, aptwarden suppresses its apt
 and runs it explicitly according to `policy.restart`. For your own `apt` runs it keeps
 asking interactively as usual. `hosts check` shows `needrestart installed` once it is
 there.
+
+With `restart: auto`, needrestart restarts the services itself (`needrestart -r a`) and
+follows its own rules: it leaves some services alone, such as dbus, the display manager
+or anything systemd refuses to restart, and it also restarts containers it finds running
+outdated libraries. aptwarden then asks it again and reports only what was really
+restarted. Services that still need a restart are listed in a note of the patch result
+(`services still need a restart: …`); restart them yourself or reboot the host.
 
 ### Proxmox API token
 

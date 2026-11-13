@@ -118,6 +118,59 @@ def test_helper_installs_the_simulated_transaction(tmp_path):
     assert all("--only-upgrade --no-remove" in c for c in calls)
 
 
+def fake_needrestart(tmp_path, still_listed):
+    """A needrestart that lists ssh and dbus, restarts only without -b (as the real one
+    does) and then lists ``still_listed``. Returns its call log."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log, done = tmp_path / "needrestart.log", tmp_path / "restarted"
+    fake = bin_dir / "needrestart"
+    fake.write_text(f"""#!/bin/sh
+echo "$*" >> {log}
+case " $* " in
+    *" -b "*)
+        echo "NEEDRESTART-VER: 3.11"
+        echo "NEEDRESTART-KSTA: 1"
+        if [ -e {done} ]; then
+            for s in {still_listed}; do echo "NEEDRESTART-SVC: $s"; done
+        else
+            echo "NEEDRESTART-SVC: ssh.service"
+            echo "NEEDRESTART-SVC: dbus.service"
+        fi ;;
+    *" -r a "*) echo "Restarting services..."; : > {done} ;;
+esac
+""")
+    fake.chmod(0o755)
+    log.write_text("")
+    return log
+
+
+def test_helper_needrestart_restart_really_restarts(tmp_path):
+    # "needrestart -r a -b" restarts nothing: batch mode only lists
+    log = fake_needrestart(tmp_path, "dbus.service")
+    r, _ = run_helper(tmp_path, "needrestart", "restart")
+    assert r.returncode == 0, r.stderr
+    calls = log.read_text().splitlines()
+    assert calls == ["-r l -b", "-r a -l", "-r l -b -l"]
+    assert "-b" not in calls[1].split()
+    services, reboot = apt.parse_needrestart(r.stdout)
+    assert services == ["ssh.service", "dbus.service"] and not reboot
+    assert apt.parse_pending_restarts(r.stdout) == ["dbus.service"]
+    assert "Restarting services..." in r.stderr and "Restarting" not in r.stdout
+
+
+def test_helper_needrestart_list_and_nothing_to_restart(tmp_path):
+    log = fake_needrestart(tmp_path, "")
+    r, _ = run_helper(tmp_path, "needrestart", "list")
+    assert r.returncode == 0 and log.read_text().splitlines() == ["-r l -b"]
+    assert apt.parse_needrestart(r.stdout)[0] == ["ssh.service", "dbus.service"]
+    (tmp_path / "restarted").write_text("")  # nothing is listed any more
+    r, _ = run_helper(tmp_path, "needrestart", "restart")
+    assert r.returncode == 0, r.stderr
+    assert log.read_text().splitlines()[1:] == ["-r l -b"]  # no restart pass needed
+    assert apt.parse_needrestart(r.stdout)[0] == []
+
+
 def test_helper_version(tmp_path):
     from aptwarden.patch.runner import HELPER_VERSION
 
@@ -184,6 +237,9 @@ def test_parse_needrestart():
            "NEEDRESTART-SVC: ssh.service\nNEEDRESTART-SVC: cron.service\n")
     assert apt.parse_needrestart(out) == (["ssh.service", "cron.service"], False)
     assert apt.parse_needrestart("NEEDRESTART-KSTA: 3\n") == ([], True)
+    assert apt.parse_pending_restarts(out) == []
+    assert apt.parse_pending_restarts(
+        out + "APTWARDEN-PENDING: dbus.service\nAPTWARDEN-PENDING: \n") == ["dbus.service"]
 
 
 def test_parse_show_source_versions():

@@ -33,7 +33,7 @@ from aptwarden.transport import Transport, TransportError
 
 log = logging.getLogger(__name__)
 
-HELPER_VERSION = "2"
+HELPER_VERSION = "3"
 # The helper's exit status when it refuses a call. It only exits so before running apt, so
 # nothing on the host changed.
 HELPER_REFUSED = 2
@@ -161,7 +161,8 @@ class PatchRunner:
         kernel: kernel boot id plus the start time of PID 1."""
         r = t.run(["cat", "/proc/sys/kernel/random/boot_id", "/proc/1/stat"], timeout=15)
         boot_id, _, stat = r.check().stdout.partition("\n")
-        start = stat.rpartition(")")[2].split()[19] if ")" in stat else ""
+        fields = stat.rpartition(")")[2].split() if ")" in stat else []
+        start = fields[19] if len(fields) > 19 else ""
         return f"{boot_id.strip()}/{start}"
 
     def _wait_back(self, t: Transport, old_marker: str, timeout: float = 900) -> bool:
@@ -196,6 +197,13 @@ class PatchRunner:
             result.status, result.reason = "aborted", str(e)
         except (TransportError, SnapshotError) as e:
             self._failure(result, host, transport, provider, f"{result.stage}: {e}")
+        except Exception as e:  # noqa: BLE001 - see below
+            # A bug or an answer nobody expected. After the snapshot the host may be
+            # half patched, so this must end like any other failure (rollback or alert)
+            # and be stored; propagating would skip both and stop the whole run.
+            log.exception("patch crashed", extra={"host": host.name, "stage": result.stage})
+            self._failure(result, host, transport, provider,
+                          safe(f"{result.stage}: unexpected error: {type(e).__name__}: {e}"))
         result.finished_at = utcnow()
         log.log(logging.ERROR if result.alert else logging.INFO, "patch result",
                 extra={"host": host.name, "status": result.status, "stage": result.stage,
@@ -322,7 +330,7 @@ class PatchRunner:
                                  reason=f"manual rollback to {ref.name}")
         try:
             marker = self._marker(t)
-        except TransportError:
+        except Exception:  # noqa: BLE001 - host unreachable or odd output: any marker will do
             marker = ""
         try:
             provider.rollback(ref)
@@ -335,6 +343,10 @@ class PatchRunner:
         except (TransportError, SnapshotError) as e:
             result.status = "rollback-failed"
             result.reason += f": {e}"
+        except Exception as e:  # noqa: BLE001 - the result must still be stored
+            log.exception("rollback crashed", extra={"host": host.name})
+            result.status = "rollback-failed"
+            result.reason += safe(f": unexpected error: {type(e).__name__}: {e}")
         result.finished_at = utcnow()
         self.state.save_patch(run_id, host.name, result.status, result.started_at,
                               result.to_dict())
@@ -361,7 +373,13 @@ class PatchRunner:
                 services, kernel = apt.parse_needrestart(r.stdout)
                 reboot_needed = reboot_needed or kernel
                 if mode == "auto":
-                    result.restarted = services
+                    # the helper lists the services again after needrestart restarted them
+                    pending = apt.parse_pending_restarts(r.stdout)
+                    result.restarted = [s for s in services if s not in pending]
+                    if pending:
+                        result.notes.append(
+                            "services still need a restart (deferred by needrestart, or "
+                            "the restart failed): " + ", ".join(pending))
                 elif services:
                     result.notes.append("services need a restart: " + ", ".join(services))
             else:
@@ -401,7 +419,7 @@ class PatchRunner:
         result.stage = "rollback"
         try:
             marker = self._marker(t)
-        except TransportError:
+        except Exception:  # noqa: BLE001 - host unreachable or odd output: any marker will do
             marker = ""
         try:
             provider.rollback(ref)
@@ -416,3 +434,8 @@ class PatchRunner:
         except (TransportError, SnapshotError) as e:
             result.status = "rollback-failed"
             result.reason += f"; rollback failed: {e}"
+        except Exception as e:  # noqa: BLE001 - must end in a stored status and an alert
+            log.exception("rollback crashed", extra={"host": host.name})
+            result.status = "rollback-failed"
+            result.reason += safe(f"; rollback failed: unexpected error: "
+                                  f"{type(e).__name__}: {e}")

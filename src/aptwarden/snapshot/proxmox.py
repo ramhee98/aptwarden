@@ -77,13 +77,25 @@ class ProxmoxClient:
             conn.close()
         if resp.status != 200:
             raise SnapshotError(f"proxmox {method} {path}: HTTP {resp.status} {resp.reason}")
-        return json.loads(raw or b"{}").get("data")
+        # e.g. an HTML page from a proxy in front of the API: a SnapshotError like any
+        # other API failure, not a ValueError that callers do not expect
+        try:
+            payload = json.loads(raw or b"{}")
+        except ValueError as e:
+            raise SnapshotError(f"proxmox {method} {path}: response is not JSON") from e
+        if not isinstance(payload, dict):
+            raise SnapshotError(f"proxmox {method} {path}: unexpected response")
+        return payload.get("data")
 
     def wait_task(self, node: str, upid: str, timeout: float | None = None) -> None:
+        if not isinstance(upid, str) or not upid:
+            raise SnapshotError(f"proxmox returned no task id ({upid!r})")
         deadline = time.monotonic() + (timeout or self.settings.get("task_timeout", 600))
         path = f"/nodes/{node}/tasks/{urllib.parse.quote(upid, safe='')}/status"
         while True:
             status = self.request("GET", path)
+            if not isinstance(status, dict):
+                raise SnapshotError(f"proxmox task {upid}: unexpected status response")
             if status.get("status") == "stopped":
                 if status.get("exitstatus") != "OK":
                     raise SnapshotError(f"proxmox task {upid} failed: {status.get('exitstatus')}")

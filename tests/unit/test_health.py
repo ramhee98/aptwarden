@@ -377,3 +377,32 @@ def test_on_host_redirects():
     t = Sequence(*[(0, "\n302 http://blog.example.org/again")] * 10)
     r = run_check(base, t)
     assert r.detail == "more than 5 redirects" and len(t.calls) == 6
+
+
+@pytest.mark.parametrize("payload, detail", [
+    (b"SSH-2.0-OpenSSH_10.0\r\n\r\n", "BadStatusLine"),
+    (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nabc", "IncompleteRead"),
+    (b"HTTP/1.1 200 OK\r\nX: " + b"a" * 70000 + b"\r\n\r\n", "LineTooLong"),
+])
+def test_a_check_never_raises(payload, detail):
+    """http.client's own errors are no OSError. A check that raises instead of failing
+    would end the patch run without the rollback a failed check triggers."""
+    import socket
+    import threading
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+
+    def serve():
+        conn, _ = server.accept()
+        conn.recv(4096)
+        conn.sendall(payload)
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        result = run_check({"http": f"http://127.0.0.1:{server.getsockname()[1]}/"}, Scripted())
+    finally:
+        server.close()
+    assert not result.ok and detail in result.detail

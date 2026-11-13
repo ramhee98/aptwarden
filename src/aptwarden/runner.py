@@ -371,11 +371,31 @@ class Runner:
                                    reason="no vulnerability data available")
         transport = factory.create(h)
         try:
-            provider = self.provider(h)
-            return runner.run(h, inv, record.findings, run.run_id, transport, provider, dry_run)
-        except SnapshotError as e:
-            return HostPatchResult(h.name, run.run_id, dry_run, "aborted", "preflight",
-                                   reason=str(e))
+            try:
+                provider = self.provider(h)
+            except SnapshotError as e:
+                return HostPatchResult(h.name, run.run_id, dry_run, "aborted", "preflight",
+                                       reason=str(e))
+            try:
+                return runner.run(h, inv, record.findings, run.run_id, transport, provider,
+                                  dry_run)
+            except Exception as e:  # noqa: BLE001 - one host must not stop the run
+                # The patch runner handles its own failures; what gets here is e.g. a
+                # result that could not be stored. Nobody knows what happened to the
+                # host, so it needs a human: "failed" raises the alert and keeps hosts
+                # depending on it from being patched.
+                log.exception("patch run crashed", extra={"host": h.name})
+                result = HostPatchResult(
+                    h.name, run.run_id, dry_run, "aborted" if dry_run else "failed",
+                    reason=aplog.safe(f"unexpected error: {type(e).__name__}: {e}; the state "
+                                      f"of the host is unknown, check it"))
+                result.finished_at = utcnow()
+                if not dry_run:
+                    try:
+                        save_result(self.state, result)
+                    except Exception:  # noqa: BLE001 - the state db itself may be the problem
+                        log.exception("patch result not stored", extra={"host": h.name})
+                return result
         finally:
             transport.close()
 

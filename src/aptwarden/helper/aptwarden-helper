@@ -11,7 +11,7 @@
 set -eu
 set -f  # no globbing of arguments
 
-HELPER_VERSION=2
+HELPER_VERSION=3
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # Test hook for aptwarden's own test suite. Never honoured as root, so it has
@@ -136,7 +136,37 @@ case "$cmd" in
         command -v needrestart >/dev/null 2>&1 || { echo "needrestart not installed" >&2; exit 3; }
         case "$1" in
             list) exec needrestart -r l -b ;;
-            restart) exec needrestart -r a -b ;;
+            restart)
+                # Batch mode (-b) only lists: needrestart skips the restart of
+                # every service there, whatever -r says. So list, restart without
+                # -b (its report goes to stderr), and list again. What is still
+                # listed was deferred or refused (needrestart leaves e.g. dbus and
+                # display managers alone) or did not come back with the new code.
+                before=$(needrestart -r l -b) || {
+                    echo "aptwarden-helper: needrestart -r l -b failed" >&2
+                    exit 1
+                }
+                printf '%s\n' "$before"
+                case "$before" in
+                    *"NEEDRESTART-SVC: "*) ;;
+                    *) exit 0 ;;
+                esac
+                # -l: only the library check; kernel and microcode are in $before
+                needrestart -r a -l </dev/null >&2 ||
+                    echo "aptwarden-helper: needrestart -r a exited $?" >&2
+                after=$(needrestart -r l -b -l) || {
+                    echo "aptwarden-helper: needrestart -r l -b failed after the restart" >&2
+                    exit 1
+                }
+                while IFS= read -r line; do
+                    case "$line" in
+                        "NEEDRESTART-SVC: "*)
+                            echo "APTWARDEN-PENDING: ${line#NEEDRESTART-SVC: }" ;;
+                    esac
+                done <<EOF
+$after
+EOF
+                ;;
             *) die "usage: needrestart list|restart" ;;
         esac
         ;;
