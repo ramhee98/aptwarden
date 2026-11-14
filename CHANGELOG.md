@@ -3,6 +3,24 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Upgrade notes
+
+- **Copy the systemd units again** (`aptwarden-report.service`,
+  `aptwarden-patch.service`) and run `systemctl daemon-reload`, see the README,
+  "Upgrading".
+
+### Fixes
+
+- **The report no longer fails when a patch run ends at the same time.** Both units
+  used `RuntimeDirectory=aptwarden`, and systemd removes that directory when either
+  unit stops, even while the other still runs. When the hourly patch run finished
+  during the 06:00 report, the report lost the directory holding its SSH control
+  sockets, exited with `[Errno 2] No such file or directory: '/run/aptwarden/aptw-…'`
+  and sent no summary. Each unit now has its own runtime directory
+  (`/run/aptwarden-report`, `/run/aptwarden-patch`).
+
 ## 0.8.0 (2026-11-13)
 
 ### Upgrade notes

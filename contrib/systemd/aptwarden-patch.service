@@ -16,7 +16,9 @@ ExecStart=/usr/local/bin/aptwarden patch
 
 StateDirectory=aptwarden
 CacheDirectory=aptwarden
-RuntimeDirectory=aptwarden
+# One per unit: systemd removes it when the unit stops, even while another unit
+# that names the same directory is still running.
+RuntimeDirectory=aptwarden-patch
 ConfigurationDirectory=aptwarden
 
 # Secrets: reference them in config.yaml by name, e.g. api_key_file: nvd-api-key
