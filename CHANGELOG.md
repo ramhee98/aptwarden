@@ -11,6 +11,20 @@ commits.
   `aptwarden-patch.service`) and run `systemctl daemon-reload`, see the README,
   "Upgrading".
 
+### Notifications
+
+- **A night with patch windows sends one mail.** With `patch_summary: digest` the patch
+  results already went into the 06:00 report, but the scan before each patch run still
+  sent its own vulnerability alert: new critical/KEV findings, and reminders, which come
+  back `remind_after` after the run that last sent them, so at the time of whichever
+  window that was. Hosts patched at 02:00 and 04:00 caused an alert at each. Now these
+  alerts wait for the next report. Patch problems, hosts that cannot be reached and
+  source problems still alert immediately. `patch_summary: immediate` keeps the old
+  behaviour.
+- **The report sends its alert and summary as one mail.** The alert is on top, the
+  summary below it, and the subject starts with `ALERT:` followed by the summary's
+  counts. `X-Aptwarden-Kind` is `alert`, so a mail filter on it still catches it.
+
 ### Fixes
 
 - **The report no longer fails when a patch run ends at the same time.** Both units

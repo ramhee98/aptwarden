@@ -151,9 +151,9 @@ def test_changes_and_alerts_across_runs(setup):
     runner = Runner(cfg, http=http, transports=factory, notifiers=[notifier])
     run1 = runner.report(hosts)
     assert run1.changes["web01"].first_scan
-    kinds = [m.kind for m in notifier.sent]
-    assert kinds == ["alert", "summary"]
-    assert "CVE-2026-24061" in notifier.sent[0].body  # KEV
+    [msg] = notifier.sent  # alert and summary in one mail
+    assert msg.kind == "alert" and "aptwarden summary" in msg.body
+    assert "CVE-2026-24061" in msg.body  # KEV
 
     # openssl upgraded past every fix: its findings are resolved, nothing new
     from tests.conftest import fixture_text

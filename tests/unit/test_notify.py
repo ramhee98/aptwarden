@@ -217,7 +217,8 @@ def test_alert_once_then_reminder(dispatcher):
     # after remind_after
     state.db.execute("UPDATE seen SET alerted_at = '2026-01-01T00:00:00+00:00'")
     d.dispatch(run_with([host]))
-    assert [m.kind for m in notifier.sent] == ["alert", "summary"]
+    [msg] = notifier.sent  # the reminder, with the summary below it
+    assert msg.kind == "alert" and "aptwarden summary" in msg.body
 
 
 def test_failed_delivery_is_retried(dispatcher):
@@ -341,6 +342,49 @@ def test_patch_run_sends_no_mail_in_digest_mode(make_config, tmp_path):
         run.patches = [HostPatchResult("web01", "r1", status="patched")]
         Dispatcher(make_config(notify={"patch_summary": mode}), state, [notifier]).dispatch(run)
         assert [m.kind for m in notifier.sent] == expected, mode
+        state.close()
+
+
+def test_report_alert_and_summary_are_one_mail(make_config, tmp_path):
+    host = ok_host("web01", [f("CVE-1", Severity.CRITICAL)])
+    for policy, kind in (("always", "alert"), ("never", "alert")):
+        state = State(tmp_path / f"{policy}.db")
+        notifier = FakeNotifier()
+        Dispatcher(make_config(notify={"summary": policy}), state, [notifier]).dispatch(
+            run_with([host], status="partial"))
+        [msg] = notifier.sent
+        assert msg.kind == kind
+        assert msg.subject.startswith("[aptwarden] ALERT: 1 critical/KEV/blocked")
+        if policy == "always":
+            assert msg.subject.endswith(" · 1 hosts · 1 fixable (1 critical, 0 KEV) · 0 new")
+            assert "PROBLEM" not in msg.subject
+            assert msg.body.index("CVE-1") < msg.body.index("aptwarden summary")
+        else:
+            assert "aptwarden summary" not in msg.body
+        assert state.alert_due("web01", host.findings, 0) == []
+        state.close()
+
+
+def test_patch_run_defers_vulnerability_alerts_in_digest_mode(make_config, tmp_path):
+    from aptwarden.patch.runner import HostPatchResult
+
+    host = ok_host("web01", [f("CVE-1", Severity.CRITICAL)])
+    for mode, expected in (("digest", ["dns01 rolled-back"]),
+                           ("immediate", ["dns01 rolled-back", "critical/KEV"])):
+        state = State(tmp_path / f"{mode}.db")
+        notifier = FakeNotifier()
+        run = run_with([host, failed_host("db01")],
+                       {"web01": HostChanges(), "db01": HostChanges(newly_failed=True)})
+        run.command = "patch"
+        run.patches = [HostPatchResult("dns01", "r1", status="rolled-back")]
+        Dispatcher(make_config(notify={"patch_summary": mode}), state, [notifier]).dispatch(run)
+        alert = next(m for m in notifier.sent if m.kind == "alert")
+        for text in expected + ["1 host(s) unreachable"]:
+            assert text in alert.subject, (mode, text)
+        if mode == "digest":
+            assert "critical/KEV" not in alert.subject
+            # not marked as alerted: the next report sends it
+            assert state.alert_due("web01", host.findings, 0) == host.findings
         state.close()
 
 

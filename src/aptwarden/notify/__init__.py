@@ -8,7 +8,9 @@ on the next run.
 
 Patch results go out after each patch run (``notify.patch_summary: immediate``)
 or are collected into the next report summary (``digest``). Patch problems are
-alerts and go out immediately either way.
+alerts and go out immediately either way. In digest mode the scan before a patch
+run sends no vulnerability alerts; the next report sends them. A report sends one
+message: an alert has the summary below it.
 """
 
 from __future__ import annotations
@@ -292,6 +294,13 @@ def compose_summary(prefix: str, run: RunReport, cfg: Config,
     return Message("summary", subject, "\n".join(lines))
 
 
+def combine(prefix: str, alert: Message, summary: Message) -> Message:
+    """An alert with the run's summary below it, as one message of kind alert."""
+    stats = summary.subject.removeprefix(prefix).strip().removeprefix("PROBLEM: ")
+    body = alert.body.rstrip("\n") + "\n\n" + "=" * 72 + "\n\n" + summary.body
+    return Message("alert", f"{alert.subject} · {stats}", body)
+
+
 class Dispatcher:
     def __init__(self, cfg: Config, state: State, notifiers: list[Notifier] | None = None):
         self.cfg = cfg
@@ -322,9 +331,14 @@ class Dispatcher:
         prefix = ncfg["subject_prefix"]
         remind = parse_duration(alert_cfg["remind_after"])
 
+        policy = ncfg["summary"]
+        digest = ncfg["patch_summary"] == "digest"
+        is_patch = run.command.startswith("patch")
         alerts: dict[str, list[Finding]] = {}
         for h in run.hosts:
-            if h.ok:
+            # In digest mode the scan before a patch run leaves vulnerability alerts
+            # (new ones and reminders) to the next report, so they arrive in one mail.
+            if h.ok and not (is_patch and digest):
                 due = self.state.alert_due(h.host, alert_candidates(h.findings, alert_cfg),
                                            remind)
                 if due:
@@ -334,30 +348,34 @@ class Dispatcher:
 
         errors: list[str] = []
         alert = compose_alert(prefix, run, alerts, failed)
-        if alert is not None:
-            alert_errors = self.send(alert)
-            errors += alert_errors
-            if not alert_errors:
+
+        def deliver(msg: Message) -> bool:
+            msg_errors = self.send(msg)
+            errors.extend(msg_errors)
+            if not msg_errors and msg.kind == "alert":
                 for host, findings in alerts.items():
                     self.state.mark_alerted(host, findings)
+            return not msg_errors
 
-        policy = ncfg["summary"]
-        digest = ncfg["patch_summary"] == "digest"
-        if run.command.startswith("patch"):
+        if is_patch:
+            if alert is not None:
+                deliver(alert)
             # Patch runs are frequent (timer): report only what happened, or leave
             # it to the next report summary.
             if noteworthy_patches(run) and policy != "never" and not digest:
-                errors += self.send(compose_patch_summary(prefix, run))
+                deliver(compose_patch_summary(prefix, run))
             return errors
         patches, position = digest_patches(self.state, run.started_at) if digest else ([], 0)
         changed = any(c.changed for c in run.changes.values())
         if policy == "always" or (policy == "changes" and (changed or patches
                                                            or alert is not None
                                                            or run.status != "ok")):
-            summary_errors = self.send(compose_summary(prefix, run, self.cfg, patches))
-            errors += summary_errors
-            if summary_errors:
+            summary = compose_summary(prefix, run, self.cfg, patches)
+            # One mail per report: the alert goes on top of the summary.
+            if not deliver(summary if alert is None else combine(prefix, alert, summary)):
                 return errors
+        elif alert is not None:
+            deliver(alert)
         if digest and policy != "never":
             self.state.set(**{DIGEST_KEY: position})
         return errors

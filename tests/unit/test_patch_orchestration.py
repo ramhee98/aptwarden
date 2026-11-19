@@ -126,7 +126,7 @@ def test_patch_digest_goes_into_the_next_report(make_config, monkeypatch):
     runner, h, sent = patch_setup(cfg, monkeypatch)
     run = runner.patch(cfg.hosts, ignore_window=True)
     assert {p.host: p.status for p in run.patches}["web01"] == "patched"
-    assert [m.kind for m in sent] == ["alert"]  # the new critical finding, no patch mail
+    assert sent == []  # no patch mail, and the new critical finding waits for the report
 
     # a rollback still alerts at once
     h.installed = {"openssl": "3.5.1-1", "libssl3t64:amd64": "3.5.1-1"}
@@ -137,13 +137,18 @@ def test_patch_digest_goes_into_the_next_report(make_config, monkeypatch):
     assert {p.host: p.status for p in run.patches}["web01"] == "rolled-back"
     assert [m.kind for m in sent] == ["alert"]
     assert "patching: web01 rolled-back" in sent[0].subject
+    assert "critical/KEV" not in sent[0].subject
 
-    # the next report summary lists both patch runs, oldest first
+    # one report mail: the deferred finding alert on top of the summary, which lists
+    # both patch runs, oldest first
     sent.clear()
     runner.report(cfg.hosts)
-    [summary] = [m for m in sent if m.kind == "summary"]
-    assert "1 patched, 1 rolled-back" in summary.subject
-    body = summary.body
+    [msg] = sent
+    assert msg.kind == "alert"
+    assert msg.subject.startswith("[aptwarden] ALERT: 3 critical/KEV/blocked")  # 3 hosts
+    assert "1 patched, 1 rolled-back" in msg.subject
+    body = msg.body
+    assert body.index("CVE-2026-1") < body.index("aptwarden summary")
     assert "Patch runs since the last summary:" in body
     assert body.index("web01: patched") < body.index("web01: rolled-back")
     assert "openssl 3.5.1-1 -> 3.5.7-1" in body
@@ -151,7 +156,8 @@ def test_patch_digest_goes_into_the_next_report(make_config, monkeypatch):
     # ... and only once
     sent.clear()
     runner.report(cfg.hosts)
-    [summary] = [m for m in sent if m.kind == "summary"]
+    [summary] = sent
+    assert summary.kind == "summary"
     assert "Patch runs since" not in summary.body and "patched" not in summary.subject
     runner.close()
 
