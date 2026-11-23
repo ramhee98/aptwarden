@@ -58,6 +58,20 @@ def release_label(summary: dict) -> str:
             f"({summary.get('codename') or '?'})")
 
 
+DEBIAN_TRACKER = "https://security-tracker.debian.org/tracker/"
+UBUNTU_SECURITY = "https://ubuntu.com/security/"
+
+
+def advisory_url(vuln_id: str, distro: str = "debian") -> str:
+    """Where to read about a vulnerability: Ubuntu's notice or CVE page for Ubuntu
+    hosts and USN ids, the Debian tracker otherwise."""
+    if vuln_id.startswith("USN-"):
+        return f"{UBUNTU_SECURITY}notices/{vuln_id}"
+    if distro == "ubuntu" and vuln_id.startswith("CVE-"):
+        return f"{UBUNTU_SECURITY}{vuln_id}"
+    return DEBIAN_TRACKER + vuln_id
+
+
 @dataclass(frozen=True)
 class Package:
     name: str  # binary package, with ":arch" qualifier for multi-arch: same packages
@@ -125,7 +139,7 @@ class Finding:
     binaries: list[str] = field(default_factory=list)
     origins: list[str] = field(default_factory=list)  # source plugins that reported it
     aliases: list[str] = field(default_factory=list)
-    urgency: str | None = None  # Debian tracker urgency
+    urgency: str | None = None  # Debian tracker urgency or Ubuntu priority
     nodsa: bool = False
     description: str = ""
     severity: Severity = Severity.UNKNOWN

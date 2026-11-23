@@ -130,7 +130,7 @@ def test_report_fails_hosts_no_source_covers(setup):
 
 
 def test_osv_covers_ubuntu_only_online(setup):
-    # OSV has no Ubuntu ecosystem mapping yet; Debian hosts it covers, but not offline
+    # OSV covers hosts with an ecosystem, but not in offline runs
     cfg, http, factory = setup
     runner = Runner(cfg, http=http, transports=factory)
     osv = OsvSource({"url": OSV}, runner.cache, http)

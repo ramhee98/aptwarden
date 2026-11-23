@@ -24,7 +24,7 @@ from pathlib import Path
 from aptwarden import __version__
 from aptwarden.config import Config, HostConfig
 from aptwarden.definitions import Definition
-from aptwarden.models import Finding, FindingStatus, Severity, release_label
+from aptwarden.models import Finding, FindingStatus, Severity, advisory_url, release_label
 from aptwarden.patch import planner, window
 from aptwarden.patch.runner import policy_skip_reason
 from aptwarden.report import group_findings, truncate, version_change
@@ -33,7 +33,6 @@ from aptwarden.state import HostRecord, State
 
 log = logging.getLogger(__name__)
 
-TRACKER_URL = "https://security-tracker.debian.org/tracker/"
 MAX_OTHER = 30  # not-fixable findings listed per host (above the report threshold)
 # No scripts, no external resources, no forms.
 CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
@@ -112,8 +111,14 @@ def _vuln_link(vuln_id: str) -> str:
     return f'<a href="#v-{_e(vuln_id)}">{_e(vuln_id)}</a>'
 
 
-def _tracker_link(vuln_id: str) -> str:
-    return f'<a href="{_e(TRACKER_URL + vuln_id)}" rel="noreferrer">{_e(vuln_id)}</a>'
+def _one_distro(distros: set[str]) -> str:
+    """Ubuntu's pages only where every host listing the vulnerability runs Ubuntu."""
+    return "ubuntu" if distros == {"ubuntu"} else "debian"
+
+
+def _tracker_link(vuln_id: str, distro: str = "debian") -> str:
+    return (f'<a href="{_e(advisory_url(vuln_id, distro))}" rel="noreferrer">'
+            f'{_e(vuln_id)}</a>')
 
 
 def _local(when: datetime, tz: str | None) -> str:
@@ -190,10 +195,12 @@ def _vulnerabilities(records: list[tuple[HostRecord, str | None]],
     """Every vulnerability listed in a host's details, once, with its description and
     hosts. The host tables link here instead of repeating the descriptions."""
     found: dict[str, list[tuple[str, Finding]]] = {}
+    distros: dict[str, set[str]] = {}
     for rec, _ in records:
         fixable, _, notable = _listed(rec, min_severity)
         for f in fixable + notable:
             found.setdefault(f.vuln_id, []).append((rec.host, f))
+            distros.setdefault(f.vuln_id, set()).add(rec.summary.get("distro") or "debian")
     if not found:
         return ""
     page_hosts = [rec.host for rec, _ in records]
@@ -208,14 +215,15 @@ def _vulnerabilities(records: list[tuple[HostRecord, str | None]],
         hosts = _hosts_cell(list(dict.fromkeys(host for host, _ in items)), page_hosts)
         score = f"{cvss:.1f}" if cvss is not None else "-"
         badge = '<span class="badge bad">KEV</span>' if kev else ""
+        link = _tracker_link(vuln_id, _one_distro(distros[vuln_id]))
         rows.append(((-severity, not kev, -(cvss or 0), vuln_id),  # as _risk_order
-                     f'<tr id="v-{_e(vuln_id)}"><td>{_tracker_link(vuln_id)}</td>'
+                     f'<tr id="v-{_e(vuln_id)}"><td>{link}</td>'
                      f'<td>{_sev(severity)}</td><td class="num">{score}</td><td>{badge}</td>'
                      f"<td>{_e(truncate(description, 160))}</td><td>{hosts}</td></tr>"))
     rows.sort(key=lambda r: r[0])
     return (f"<h2>Vulnerabilities</h2>"
             f'<p class="muted">{len(rows)} vulnerabilities listed in the host details, each '
-            "once. IDs link to the Debian security tracker.</p>"
+            "once. IDs link to the distribution's security tracker.</p>"
             '<div class="wrap"><table>'
             + _head("ID", "Severity", "CVSS", "", "Description", "Hosts")
             + "".join(row for _, row in rows) + "</table></div>")

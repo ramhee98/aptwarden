@@ -90,16 +90,27 @@ packages they mainly add redundancy if the tracker is unavailable. aptwarden que
 vulnerability once. Hydrated records are cached by `(id, modified)`. OSV becomes more
 important for Docker images and language ecosystems later.
 
+For Ubuntu hosts OSV is the only source so far. Canonical publishes `UBUNTU-CVE-*`
+records in the ecosystems `Ubuntu:<version>:LTS` (April releases of even years) and
+`Ubuntu:<version>`, one entry per release and source package. A fixed event means the
+fix is released to the release's `-security`/`-updates` pockets, so the finding is
+`fixable`; an entry without one is `no-fix`. Ubuntu Pro fixes live in separate
+ecosystems (`Ubuntu:Pro:24.04:LTS`) and are not queried yet. Security notices (`USN-*`)
+bundle the CVEs of every release they cover and are skipped, except where no CVE
+record of the package covers any of their CVEs: some fixes have no CVE at all (e.g.
+USN-8945-1, xz-utils). Regression notices (summary `<package> regression`) are always
+skipped.
+
 ### Severity
 
 The Debian tracker only carries an `urgency`, and most entries are "not yet assigned".
 aptwarden computes a normalised severity:
 
 1. a custom definition's severity
-2. Debian urgency `unimportant` → `low` (Debian knows when an issue does not apply to its
-   build)
+2. Debian urgency `unimportant` or Ubuntu priority `negligible` → `low` (the
+   distribution knows when an issue does not apply to its build)
 3. CVSS base score → critical (>= 9.0), high (>= 7.0), medium (>= 4.0), low (> 0)
-4. Debian urgency `high`/`medium`/`low`
+4. Debian urgency `high`/`medium`/`low`, Ubuntu priority `critical` to `low`
 5. `unknown`
 
 CVSS comes from OSV's `CVE-*` records. They carry the CVSS vector, are fast and have no

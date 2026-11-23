@@ -37,6 +37,27 @@ def test_assess_order(urgency, cvss, severity, reason):
     assert reason in f.severity_reason
 
 
+@pytest.mark.parametrize("urgency, cvss, severity, reason", [
+    ("negligible", CvssResult(9.8, "3.1", "v", "osv"), Severity.LOW, "ubuntu: negligible"),
+    ("medium", CvssResult(9.8, "3.1", "v", "osv"), Severity.CRITICAL, "cvss 3.1 9.8"),
+    ("critical", None, Severity.CRITICAL, "ubuntu priority: critical"),
+    ("medium", None, Severity.MEDIUM, "ubuntu priority: medium"),
+    ("untriaged", None, Severity.UNKNOWN, "no score"),
+])
+def test_assess_ubuntu_priority(urgency, cvss, severity, reason):
+    f = finding(urgency=urgency)
+    assess(f, cvss, "ubuntu")
+    assert (f.severity, f.severity_reason.startswith(reason)) == (severity, True), \
+        f.severity_reason
+
+
+def test_enrich_names_the_distribution():
+    deb, ubu = finding(urgency="medium"), finding(urgency="medium")
+    enrich({"d": [deb], "u": [ubu]}, None, None, {"u": "ubuntu"})
+    assert deb.severity_reason == "debian urgency: medium"
+    assert ubu.severity_reason == "ubuntu priority: medium"
+
+
 class FakeClock:
     def __init__(self):
         self.now = 0.0

@@ -245,7 +245,7 @@ class Runner:
             for inv in inventories:
                 mark_missing_sources(findings[inv.host], inv.apt_suites(),
                                      lambda src, rel=inv.codename: tracker.repositories(src, rel))
-        enrich(findings, self.cvss, self.kev)
+        enrich(findings, self.cvss, self.kev, {inv.host: inv.distro for inv in inventories})
         if self.cvss is not None and self.cvss.pending:
             run.notes.append(f"{self.cvss.pending} CVEs still waiting for a CVSS lookup "
                              "(NVD rate limit, continues next run; an NVD API key speeds this up)")

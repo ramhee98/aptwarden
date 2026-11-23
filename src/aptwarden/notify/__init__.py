@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from aptwarden import report
 from aptwarden.config import Config, parse_duration
-from aptwarden.models import Finding, FindingStatus, Severity
+from aptwarden.models import Finding, FindingStatus, Severity, advisory_url
 from aptwarden.state import HostRecord, State
 
 if TYPE_CHECKING:
@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-TRACKER_URL = "https://security-tracker.debian.org/tracker/"
 MAX_LISTED = 50  # findings listed per section before truncating
 DIGEST_KEY = "notify.patch_digest_position"  # the last patch result in a summary
 DIGEST_FALLBACK = timedelta(days=1)  # first summary with the digest: this far back
@@ -99,7 +98,7 @@ def _fix_text(f: Finding) -> str:
     return "no fix available yet"
 
 
-def _finding_lines(f: Finding, detail: bool) -> list[str]:
+def _finding_lines(f: Finding, detail: bool, distro: str = "debian") -> list[str]:
     score = f" {f.cvss_score:.1f}" if f.cvss_score is not None else ""
     kev = "  KEV" if f.kev else ""
     definition = f"  [{f.definition} {f.action}]" if f.definition else ""
@@ -108,7 +107,7 @@ def _finding_lines(f: Finding, detail: bool) -> list[str]:
     if detail:
         if f.description:
             lines.append(f"      {report.truncate(f.description, 200)}")
-        lines.append(f"      {TRACKER_URL}{f.vuln_id}")
+        lines.append(f"      {advisory_url(f.vuln_id, distro)}")
     return lines
 
 
@@ -218,7 +217,8 @@ def compose_alert(prefix: str, run: RunReport, alerts: dict[str, list[Finding]],
             lines.append(f"{host} ({rec.address})")
             findings = _sorted(alerts[host])
             for f in findings[:MAX_LISTED]:
-                lines += _finding_lines(f, detail=True)
+                lines += _finding_lines(f, detail=True,
+                                        distro=rec.summary.get("distro") or "debian")
             if len(findings) > MAX_LISTED:
                 lines.append(f"  … and {len(findings) - MAX_LISTED} more "
                              f"(aptwarden status --host {host} --cves)")

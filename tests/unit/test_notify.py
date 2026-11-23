@@ -201,6 +201,17 @@ def test_alert_candidates():
     assert [x.vuln_id for x in alert_candidates(fs, {**cfg, "kev": False})] == ["A", "E"]
 
 
+def test_alert_links_ubuntu_pages(dispatcher):
+    d, notifier, state = dispatcher
+    host = ok_host("ubu01", [f("CVE-1", Severity.CRITICAL), f("USN-9100-1", Severity.CRITICAL)])
+    host.summary = {"distro": "ubuntu", "codename": "noble"}
+    d.dispatch(run_with([host]))
+    [alert] = [m for m in notifier.sent if m.kind == "alert"]
+    assert "https://ubuntu.com/security/CVE-1\n" in alert.body
+    assert "https://ubuntu.com/security/notices/USN-9100-1" in alert.body
+    assert "security-tracker" not in alert.body
+
+
 def test_alert_once_then_reminder(dispatcher):
     d, notifier, state = dispatcher
     host = ok_host("web01", [f("CVE-1", Severity.CRITICAL), f("CVE-2", Severity.HIGH)])

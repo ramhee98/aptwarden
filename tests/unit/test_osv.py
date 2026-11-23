@@ -1,8 +1,10 @@
 import json
 
+import pytest
+
 from aptwarden.http import HttpError, Response
 from aptwarden.models import FindingStatus, HostInventory, Package
-from aptwarden.sources.osv import OsvSource, evaluate_ranges, normalize_id
+from aptwarden.sources.osv import OsvSource, ecosystem, evaluate_ranges, normalize_id
 from tests.conftest import FakeHttp, fixture_json, json_response
 
 URL = "https://api.osv.dev"
@@ -33,7 +35,85 @@ def batch_route(results):
 
 def test_normalize_id():
     assert normalize_id("DEBIAN-CVE-2025-11187") == "CVE-2025-11187"
+    assert normalize_id("UBUNTU-CVE-2026-109518") == "CVE-2026-109518"
     assert normalize_id("CVE-2025-1") == "CVE-2025-1"
+
+
+def ubuntu_inventory(version_id="24.04", codename="noble", host="u1", apt="2.8.3"):
+    return HostInventory(host, "ubuntu", version_id, codename, "trixie/sid", "amd64", [
+        Package("apt", apt, "amd64", "apt", apt, "ii "),
+        Package("libapt-pkg6.0t64:amd64", apt, "amd64", "apt", apt, "ii "),
+    ], distro="ubuntu", os_version=f"{version_id} LTS")
+
+
+@pytest.mark.parametrize("os_id, distro, version_id, expected", [
+    ("debian", "debian", "13", "Debian:13"),
+    ("raspbian", "debian", "12", None),       # derivatives have no OSV ecosystem
+    ("ubuntu", "ubuntu", "24.04", "Ubuntu:24.04:LTS"),
+    ("ubuntu", "ubuntu", "26.04", "Ubuntu:26.04:LTS"),
+    ("ubuntu", "ubuntu", "25.10", "Ubuntu:25.10"),
+    ("ubuntu", "ubuntu", "25.04", "Ubuntu:25.04"),  # odd year: interim, not LTS
+    ("ubuntu", "ubuntu", "", None),
+    ("ubuntu", "ubuntu", "24.04.1", None),
+])
+def test_ecosystem(os_id, distro, version_id, expected):
+    inv = HostInventory("h", os_id, version_id, "x", "", "amd64", [], distro=distro)
+    assert ecosystem(inv) == expected
+
+
+def test_evaluate_ranges_real_ubuntu_record():
+    rec = fixture_json("osv-UBUNTU-CVE-2026-109518.json")
+    lts = "Ubuntu:24.04:LTS"
+    assert evaluate_ranges(rec, lts, "apt", "2.7.14build2") == (True, "2.8.4ubuntu0.1")
+    assert evaluate_ranges(rec, lts, "apt", "2.8.4ubuntu0.1") == (False, None)
+    assert evaluate_ranges(rec, "Ubuntu:26.04:LTS", "apt", "3.2.0") == (True, "3.2.1ubuntu0.1")
+    # Ubuntu Pro has its own ecosystem; a noble host does not get its fixes
+    assert evaluate_ranges(rec, "Ubuntu:Pro:20.04:LTS", "apt", "2.0.10") == (True, "2.0.12+esm1")
+
+
+def test_match_ubuntu(cache):
+    real = fixture_json("osv-UBUNTU-CVE-2026-109518.json")
+    open_ = {**real, "id": "UBUNTU-CVE-2026-2", "upstream": ["CVE-2026-2"],
+             "severity": [{"type": "Ubuntu", "score": "negligible"}],
+             "affected": [{"package": {"name": "apt", "ecosystem": "Ubuntu:24.04:LTS"},
+                           "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}]}]}
+    # the USN of the CVE above: already covered
+    usn = {**real, "id": "USN-8996-1", "summary": "APT vulnerability", "related": [],
+           "upstream": ["UBUNTU-CVE-2026-109518"]}
+    # a fix without a CVE: only the USN reports it
+    no_cve = {**real, "id": "USN-9100-1", "summary": "APT vulnerability", "upstream": [],
+              "related": [], "severity": [], "details": "It was discovered that APT ..."}
+    regression = {**no_cve, "id": "USN-9100-2", "summary": "APT regression"}
+    withdrawn = {**real, "id": "UBUNTU-CVE-2026-3", "withdrawn": "2026-11-01T00:00:00Z"}
+    lsn = {**real, "id": "LSN-0120-1"}
+    recs = (real, open_, usn, no_cve, regression, withdrawn, lsn)
+    ids = [{"id": r["id"], "modified": r["modified"]} for r in recs]
+    seen = []
+
+    def route(headers, data):
+        queries = json.loads(data)["queries"]
+        seen.extend(q["package"]["ecosystem"] for q in queries)
+        return json_response({"results": [{"vulns": ids} for _ in queries]})
+
+    http = FakeHttp({("POST", f"{URL}/v1/querybatch"): route,
+                     **{("GET", f"{URL}/v1/vulns/{r['id']}"): json_response(r) for r in recs}})
+    src = OsvSource(SETTINGS, cache, http)
+    assert src.covers(ubuntu_inventory())
+    findings = {f.vuln_id: f for f in src.match([ubuntu_inventory()])["u1"]}
+    assert seen == ["Ubuntu:24.04:LTS"]
+    assert set(findings) == {"CVE-2026-109518", "CVE-2026-2", "USN-9100-1"}
+    fixed = findings["CVE-2026-109518"]
+    assert (fixed.status, fixed.fixed_version) == (FindingStatus.FIXABLE, "2.8.4ubuntu0.1")
+    assert fixed.urgency == "high"  # Ubuntu priority
+    assert fixed.binaries == ["apt", "libapt-pkg6.0t64:amd64"]
+    assert "UBUNTU-CVE-2026-109518" in fixed.aliases
+    assert fixed.description.startswith("On Debian, Ubuntu")
+    assert findings["CVE-2026-2"].status == FindingStatus.NO_FIX
+    assert findings["CVE-2026-2"].urgency == "negligible"
+    notice = findings["USN-9100-1"]
+    assert (notice.status, notice.fixed_version) == (FindingStatus.FIXABLE, "2.8.4ubuntu0.1")
+    assert notice.aliases == ["USN-9100-1"] and notice.urgency is None
+    assert notice.description == "It was discovered that APT ..."
 
 
 def test_evaluate_ranges_real_record():

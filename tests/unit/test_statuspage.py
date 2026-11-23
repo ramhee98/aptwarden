@@ -129,9 +129,10 @@ def test_write_errors_do_not_raise(make_config, tmp_path):
     state.close()
 
 
-def save_scan(state: State, host: str, findings=(), ok=True):
-    state.save_host("r1", HostRecord("r1", host, "192.0.2.30", ok, None if ok else "boom", {},
-                                     [], "2026-10-23T06:00:00+00:00", list(findings)))
+def save_scan(state: State, host: str, findings=(), ok=True, summary=None):
+    state.save_host("r1", HostRecord("r1", host, "192.0.2.30", ok, None if ok else "boom",
+                                     summary or {}, [], "2026-10-23T06:00:00+00:00",
+                                     list(findings)))
 
 
 def save_patch(state: State, run_id: str, host: str, status: str, started: str, reason=""):
@@ -288,6 +289,34 @@ def test_vulnerabilities_listed_once(make_config):
                                        '<a href="#web02">web02</a>, <a href="#db01">db01</a></td>')
     assert '<span class="badge bad">KEV</span>' in rows["CVE-2026-2"]
     assert '<span class="badge bad">KEV</span>' not in rows["CVE-2026-1"]
+
+
+def test_vulnerability_links_per_distribution(make_config):
+    cfg = make_config(hosts=[{"name": "deb01"}, {"name": "ubu01"}])
+    state = State(cfg.state_dir / "state.db")
+    state.start_run("r1", "report")
+    ubuntu = {"distro": "ubuntu", "os_version": "24.04 LTS", "codename": "noble"}
+
+    def finding(vuln_id, **kw):
+        return Finding(vuln_id, "openssl", "3.5.1-1", FindingStatus.FIXABLE,
+                       fixed_version="3.5.7-1", **kw)
+
+    shared = finding("CVE-2026-1", severity=Severity.HIGH)
+    save_scan(state, "deb01", [shared])
+    save_scan(state, "ubu01", [shared, finding("CVE-2026-2", severity=Severity.HIGH),
+                               finding("USN-9100-1", severity=Severity.HIGH)], summary=ubuntu)
+    page = statuspage.render(cfg, state)
+    state.close()
+    vulns = page.split("<h2>Vulnerabilities</h2>")[1]
+    hrefs = dict((v, h) for h, v in re.findall(r'<a href="([^"#]+)" rel="noreferrer">([^<]+)</a>',
+                                              vulns))
+    assert hrefs == {
+        # a Debian host lists it too: the Debian tracker knows every CVE
+        "CVE-2026-1": "https://security-tracker.debian.org/tracker/CVE-2026-1",
+        "CVE-2026-2": "https://ubuntu.com/security/CVE-2026-2",
+        "USN-9100-1": "https://ubuntu.com/security/notices/USN-9100-1",
+    }
+    assert "Ubuntu 24.04 LTS (noble)" in page
 
 
 def test_no_vulnerabilities_section_without_findings(make_config):

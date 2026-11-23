@@ -1,7 +1,10 @@
 """OSV.dev (api.osv.dev).
 
 For Debian, OSV's ``DEBIAN-CVE-*`` records are generated from the Debian
-tracker, so this source mostly adds redundancy. Queries go through
+tracker, so this source mostly adds redundancy. For Ubuntu, Canonical publishes
+``UBUNTU-CVE-*`` records (ecosystems ``Ubuntu:24.04:LTS``, ``Ubuntu:25.10``): one
+record per CVE with an entry per release and source package, the Ubuntu priority
+as severity, and a fixed version once the fix is released. Queries go through
 ``/v1/querybatch`` (ids only). Every vulnerability is then hydrated once and
 cached by (id, modified).
 """
@@ -10,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -24,9 +28,19 @@ log = logging.getLogger(__name__)
 
 BATCH_SIZE = 1000  # OSV querybatch limit
 
-# DSA/DLA/DTSA advisories bundle CVEs that OSV also publishes as individual
-# DEBIAN-CVE-* records, so they would only duplicate findings.
-_SKIP_PREFIXES = ("DSA-", "DLA-", "DTSA-")
+# Advisories bundle CVEs that OSV also publishes as individual DEBIAN-CVE-* or
+# UBUNTU-CVE-* records, so they would only duplicate findings. Livepatch notices
+# (LSN) concern the running kernel, not packages.
+_SKIP_PREFIXES = ("DSA-", "DLA-", "DTSA-", "LSN-")
+# Ubuntu security notices are the exception: some fix an issue without a CVE (or
+# with one whose record has no entry for the package, e.g. a kmod mitigation for a
+# kernel CVE), and nothing else reports those. A USN counts only where no CVE record
+# of the same package covers one of its CVEs, since a USN lists the CVEs of all
+# releases it covers (USN-8124-1 names CVE-2026-3104, which does not affect noble).
+# "<package> regression" notices only repair an earlier update.
+_FALLBACK_PREFIXES = ("USN-",)
+_ID_PREFIXES = ("DEBIAN-", "UBUNTU-")
+_UBUNTU_VERSION = re.compile(r"(\d{2})\.(\d{2})")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS osv_vulns (
@@ -43,12 +57,21 @@ Query = tuple[str, str, str]  # (ecosystem, package, version)
 def ecosystem(inv: HostInventory) -> str | None:
     if inv.os_id == "debian" and inv.os_version_id:
         return f"Debian:{inv.os_version_id}"
+    if inv.distro == "ubuntu" and (m := _UBUNTU_VERSION.fullmatch(inv.os_version_id)):
+        # LTS releases come every two years in April; os-release does not say so
+        # reliably (26.04 has "LTS" only in PRETTY_NAME)
+        lts = m.group(2) == "04" and int(m.group(1)) % 2 == 0
+        return f"Ubuntu:{inv.os_version_id}" + (":LTS" if lts else "")
     return None
 
 
 def normalize_id(osv_id: str) -> str:
-    """DEBIAN-CVE-2025-1234 -> CVE-2025-1234, matching the tracker's ids."""
-    return osv_id.removeprefix("DEBIAN-")
+    """DEBIAN-CVE-2025-1234 and UBUNTU-CVE-2025-1234 -> CVE-2025-1234, matching
+    the tracker's ids."""
+    for prefix in _ID_PREFIXES:
+        if osv_id.startswith(prefix):
+            return osv_id[len(prefix):]
+    return osv_id
 
 
 def evaluate_ranges(record: dict, eco: str, package: str, version: str):
@@ -86,6 +109,12 @@ def evaluate_ranges(record: dict, eco: str, package: str, version: str):
 
 
 def _urgency(record: dict, eco: str, package: str) -> str | None:
+    """Debian's urgency of the package, or Ubuntu's priority of the CVE."""
+    if eco.startswith("Ubuntu:"):
+        for sev in record.get("severity", []):
+            if sev.get("type") == "Ubuntu" and isinstance(sev.get("score"), str):
+                return sev["score"]
+        return None
     for affected in record.get("affected", []):
         pkg = affected.get("package", {})
         if pkg.get("ecosystem") == eco and pkg.get("name") == package:
@@ -127,7 +156,7 @@ class OsvSource(Source):
             eco = ecosystem(inv)
             if eco is None:
                 self.host_warnings.setdefault(inv.host, []).append(
-                    "no OSV ecosystem for this host (needs Debian with VERSION_ID)"
+                    "no OSV ecosystem for this host (needs Debian or Ubuntu with VERSION_ID)"
                 )
                 continue
             for source, version in inv.source_packages():
@@ -143,28 +172,25 @@ class OsvSource(Source):
 
         per_query: dict[Query, list[Finding]] = {}
         for query, ids in results.items():
-            eco, package, version = query
+            findings, notices = [], []
             for vid, _ in ids:
                 record = records.get(vid)
-                if record is None or vid.startswith(_SKIP_PREFIXES):
+                if record is None or vid.startswith(_SKIP_PREFIXES) or record.get("withdrawn"):
                     continue
-                affected, fixed = evaluate_ranges(record, eco, package, version)
-                if not affected:
+                if vid.startswith(_FALLBACK_PREFIXES):
+                    notices.append((vid, record))
+                elif (f := self._finding(query, vid, record)) is not None:
+                    findings.append(f)
+            covered = {f.vuln_id for f in findings}
+            for vid, record in notices:
+                cves = {normalize_id(c)
+                        for c in record.get("upstream", []) + record.get("related", [])}
+                if cves & covered or (record.get("summary") or "").endswith(" regression"):
                     continue
-                per_query.setdefault(query, []).append(
-                    Finding(
-                        vuln_id=normalize_id(vid),
-                        source_package=package,
-                        installed_version=version,
-                        status=FindingStatus.FIXABLE if fixed else FindingStatus.NO_FIX,
-                        fixed_version=fixed,
-                        origins=[self.name],
-                        aliases=sorted(set(record.get("upstream", []))
-                                       | set(record.get("aliases", [])) | {vid}),
-                        urgency=_urgency(record, eco, package),
-                        description=record.get("summary") or record.get("details", ""),
-                    )
-                )
+                if (f := self._finding(query, vid, record, cves)) is not None:
+                    findings.append(f)
+            if findings:
+                per_query[query] = findings
 
         out: dict[str, list[Finding]] = {}
         for inv in inventories:
@@ -175,6 +201,30 @@ class OsvSource(Source):
                     findings.append(_with_binaries(f, binaries))
             out[inv.host] = findings
         return out
+
+    def _finding(self, query: Query, vid: str, record: dict,
+                 cves: set[str] | None = None) -> Finding | None:
+        eco, package, version = query
+        affected, fixed = evaluate_ranges(record, eco, package, version)
+        if not affected:
+            return None
+        if cves is None:  # a vulnerability record
+            aliases = set(record.get("upstream", [])) | set(record.get("aliases", []))
+            description = record.get("summary") or record.get("details", "")
+        else:  # a notice: its summary only says "<package> vulnerability"
+            aliases = cves
+            description = record.get("details") or record.get("summary", "")
+        return Finding(
+            vuln_id=normalize_id(vid),
+            source_package=package,
+            installed_version=version,
+            status=FindingStatus.FIXABLE if fixed else FindingStatus.NO_FIX,
+            fixed_version=fixed,
+            origins=[self.name],
+            aliases=sorted(aliases | {vid}),
+            urgency=_urgency(record, eco, package),
+            description=description,
+        )
 
     def _querybatch(self, queries: list[Query]) -> dict[Query, list[tuple[str, str]]]:
         results: dict[Query, list[tuple[str, str]]] = {}

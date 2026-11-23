@@ -5,6 +5,27 @@ commits.
 
 ## Unreleased
 
+### Ubuntu (reporting)
+
+- **Ubuntu hosts are scanned through OSV.** The `osv` source queries Canonical's
+  records in the ecosystems `Ubuntu:24.04:LTS`, `Ubuntu:25.10` etc. (LTS: April
+  releases of even years). `UBUNTU-CVE-*` ids are reported as `CVE-*`. A fix in a
+  record is published, so the finding is `fixable`; without a fix it is `no-fix`.
+  Tested on Ubuntu 24.04 and 26.04: every fixable finding had an apt candidate that
+  reaches the fix. Ubuntu Pro (ESM) fixes are not reported yet, and patching Ubuntu
+  hosts is not tested yet.
+- **Security notices without a CVE.** Some Ubuntu fixes exist only as a USN (e.g.
+  xz-utils USN-8945-1, sudo-rs USN-8708-1, ca-certificates updates). A USN is reported
+  as `USN-…` where no CVE record of the package covers one of its CVEs; regression
+  notices are skipped.
+- **Severity:** Ubuntu's priority `negligible` counts like Debian's `unimportant`
+  (`low`, before CVSS); `low` to `critical` are used after CVSS like Debian's urgency.
+  The reason says `ubuntu priority: medium`.
+- **Links:** on Ubuntu hosts, CVEs link to `ubuntu.com/security/CVE-…` in alert mails
+  and on the status page (where every host listing the CVE runs Ubuntu), USNs to
+  `ubuntu.com/security/notices/`.
+- **OSV skips withdrawn records.**
+
 ### Hosts and inventory
 
 - **A host no source has data for fails instead of looking clean.** Before, such a
@@ -15,8 +36,7 @@ commits.
 - **Distribution detection.** The inventory records `distro` (`debian` or `ubuntu`)
   and `os_version`. Debian derivatives (`ID_LIKE=debian`) count as Debian as before;
   Ubuntu derivatives such as Linux Mint are refused, because Ubuntu's data does not
-  cover their own repositories. Preparation for Ubuntu support; Ubuntu hosts have no
-  vulnerability source yet.
+  cover their own repositories.
 - **Release shown per distribution:** `Debian 13.1 (trixie)`, `Ubuntu 24.04 LTS
   (noble)` in the report, the status page and `hosts check`. On Ubuntu,
   `/etc/debian_version` names the Debian base (`trixie/sid`); it stays in the JSON
