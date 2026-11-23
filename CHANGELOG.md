@@ -3,6 +3,19 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Helper package
+
+- **Releases on GitHub.** For every release tag, once all checks passed, CI creates a
+  GitHub release with the helper package, the SBOM and `SHA256SUMS`, so they stay
+  downloadable without a login (workflow artifacts expire). The maintainer adds
+  `SHA256SUMS.sig`, an SSH signature by the release key, verified with
+  `ssh-keygen -Y verify` and the `release_signers` file.
+- **README: apt repository setup in full,** including a pin that allows only
+  `aptwarden-helper` from that repository. aptwarden runs no public repository on
+  purpose; SECURITY.md explains why.
+
 ## 0.9.1 (2026-11-23)
 
 ### Upgrade notes

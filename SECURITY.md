@@ -86,15 +86,28 @@ install or update it:
   management, or the installer script run by an administrator. A self-update signed by
   the central host was rejected: it would rebuild package management, and a compromise
   of its signing key would be root on every host.
+- **No project-run apt repository.** Whoever signs a repository the targets trust is
+  root on them. A public aptwarden repository would make the project's signing key that
+  key for every fleet, so there is none. Operators host the package in their own
+  repository (or configuration management), add each version after verifying it, and
+  sign it with their own key.
 - **Keep those channels off the central host.** Whoever controls the apt repository's
   signing key or the configuration management is root on every host that uses it. Do
   not run them on the central aptwarden host and do not give it their keys or
   credentials; otherwise a compromised central host would be root everywhere, which
   the helper design exists to prevent.
-- **Verify the package.** CI artifacts are not signed. The build is reproducible: check
-  out the signed release tag, verify it, build the package with
-  `tools/build-helper-deb` and compare its checksum with the CI artifact before adding
-  it to your repository, which then signs it with your own key.
+- **Limit the repository to the helper.** The README's apt setup pins every package of
+  that repository except `aptwarden-helper` to priority -1, so even its signing key
+  cannot bring in or upgrade any other package.
+- **Verify the package.** Each GitHub release has the package, `SHA256SUMS` and
+  `SHA256SUMS.sig`, an SSH signature (namespace `aptwarden-release`) by the release key
+  that also signs the tags; verify it with `ssh-keygen -Y verify` and the
+  `release_signers` file. The release itself is created by CI, the only job with write
+  access, and only after all checks of the tag passed; the signature is added by the
+  maintainer after comparing the package with a local build. Without the signature:
+  the build is reproducible, so a package built from the verified tag with
+  `tools/build-helper-deb` has the same checksum. Workflow artifacts are not signed and
+  expire.
 - **What the package does as root:** its postinst creates the user `aptwarden` if it is
   missing (no key, so no login), writes `/etc/sudoers.d/aptwarden` (0440) only after
   `visudo -c` accepts it, and links `/usr/local/lib/aptwarden/aptwarden-helper` to the
@@ -178,7 +191,8 @@ The CI workflow runs these checks:
 - **[zizmor](https://docs.zizmor.sh/)** on the workflow itself, and
   **[gitleaks](https://github.com/gitleaks/gitleaks)** on the whole git history.
 
-Release tags get a CycloneDX SBOM and the helper package. Actions are pinned to commit SHAs, and checkouts
+Release tags get a CycloneDX SBOM and the helper package, published as a GitHub release
+with their checksums by the only job with write access. Actions are pinned to commit SHAs, and checkouts
 keep no credentials. bandit, pip-audit and zizmor are installed from
 `.github/requirements-ci.txt`, pinned with hashes. Dependabot keeps both current. It
 proposes a new version only once it is 7 days old, by when compromised or broken

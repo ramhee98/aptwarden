@@ -493,15 +493,28 @@ deletes the pins of `enforce_block: pin`. sudo comes in as a dependency, needres
 recommendation. With only the package in the fleet you can also set
 `ssh.helper: /usr/lib/aptwarden/aptwarden-helper`.
 
-**Getting the package:** CI builds it for every release tag (artifact
-`aptwarden-helper-deb` of the tag's workflow run). The build is reproducible, so you can
-also build it yourself from the verified tag and compare the checksum:
+**Getting the package:** every release on GitHub
+([Releases](https://github.com/ramhee98/aptwarden/releases)) has
+`aptwarden-helper_<version>_all.deb`, the SBOM, `SHA256SUMS` and `SHA256SUMS.sig`. CI
+creates the release from the tag after all checks passed; the signature over the
+checksums is added by the maintainer with the release key, the same key that signs the
+tags. Check it with the `release_signers` file from [Updating](#updating):
+
+```sh
+ssh-keygen -Y verify -f /etc/aptwarden/release_signers \
+    -I 32970397+ramhee98@users.noreply.github.com -n aptwarden-release \
+    -s SHA256SUMS.sig < SHA256SUMS                 # Good "aptwarden-release" signature ...
+sha256sum --ignore-missing -c SHA256SUMS         # aptwarden-helper_4_all.deb: OK
+```
+
+Or do without the signature: the build is reproducible, so building the package from
+the verified tag gives the same checksum:
 
 ```sh
 # in a clone whose release tag you verified as in Updating ("Installing a verified release")
 git -C /root/aptwarden-src checkout --quiet vX.Y.Z
 /root/aptwarden-src/tools/build-helper-deb /tmp/helper-deb   # needs dpkg-deb and git
-sha256sum /tmp/helper-deb/aptwarden-helper_4_all.deb         # same as the CI artifact
+sha256sum /tmp/helper-deb/aptwarden-helper_4_all.deb         # same as in SHA256SUMS
 ```
 
 **A single host,** or to try it:
@@ -510,22 +523,30 @@ sha256sum /tmp/helper-deb/aptwarden-helper_4_all.deb         # same as the CI ar
 apt install ./aptwarden-helper_4_all.deb
 ```
 
-**Your own signed apt repository** (e.g. [reprepro](https://salsa.debian.org/debian/reprepro)
-or [aptly](https://www.aptly.info/)), on a host other than the central aptwarden host.
-With reprepro, `conf/distributions` in the repository directory:
+**Your own signed apt repository.** aptwarden deliberately runs no public apt
+repository: whoever signs a repository the targets trust is root on them, and that
+should be you, not the project. You add each new version after verifying it, sign it
+with your own key, and roll it out when it suits you. The repository holds one small
+package that rarely changes. Host it on a machine other than the central aptwarden
+host. With [reprepro](https://salsa.debian.org/debian/reprepro) (or
+[aptly](https://www.aptly.info/)), `/srv/reprepro/conf/distributions`:
 
 ```
+Origin: aptwarden-local
+Label: aptwarden-local
 Codename: aptwarden
-Components: main
 Architectures: amd64 arm64
+Components: main
 SignWith: REPO-KEY-FINGERPRINT
 ```
 
 ```sh
-reprepro -b /srv/apt includedeb aptwarden aptwarden-helper_4_all.deb   # each new version
+# each new, verified version; only --outdir is served by the web server
+reprepro -b /srv/reprepro --outdir /var/www/apt includedeb aptwarden aptwarden-helper_4_all.deb
 ```
 
-On each target, once (the public key of the repository in `/etc/apt/keyrings`):
+On each target, once: the repository's public key as
+`/etc/apt/keyrings/aptwarden-repo.asc`, and
 
 ```
 # /etc/apt/sources.list.d/aptwarden.sources
@@ -533,16 +554,32 @@ Types: deb
 URIs: https://apt.example.org/
 Suites: aptwarden
 Components: main
-Signed-By: /etc/apt/keyrings/aptwarden.asc
+Signed-By: /etc/apt/keyrings/aptwarden-repo.asc
 ```
+
+```
+# /etc/apt/preferences.d/aptwarden-repo: from this repository only aptwarden-helper
+Package: aptwarden-helper
+Pin: origin "apt.example.org"
+Pin-Priority: 500
+
+Package: *
+Pin: origin "apt.example.org"
+Pin-Priority: -1
+```
+
+The pin limits what the repository can do: even with its signing key, nobody can
+install or upgrade any other package through it (a "newer libc", say). `origin` is the
+host name from `URIs`.
 
 ```sh
 apt update && apt install aptwarden-helper
 ```
 
 New versions then arrive with the host's normal `apt upgrade`, or with
-unattended-upgrades if you add the repository's origin to
-`Unattended-Upgrade::Origins-Pattern`.
+unattended-upgrades if you add `"o=aptwarden-local,n=aptwarden";` to
+`Unattended-Upgrade::Origins-Pattern`. Thanks to the minimum helper versions, the
+hosts need not update at the same time.
 
 **Ansible:** with the repository above, or by copying the `.deb`:
 
@@ -550,6 +587,13 @@ unattended-upgrades if you add the repository's origin to
 - hosts: aptwarden_targets
   become: true
   tasks:
+    - name: our apt repository, limited to aptwarden-helper (files as above)
+      ansible.builtin.copy:
+        src: "apt/{{ item }}"
+        dest: "/etc/apt/{{ item }}"
+        mode: "0644"
+      loop: [keyrings/aptwarden-repo.asc, sources.list.d/aptwarden.sources,
+             preferences.d/aptwarden-repo]
     - name: aptwarden-helper from our apt repository
       ansible.builtin.apt:
         name: aptwarden-helper
@@ -1156,6 +1200,18 @@ git -c gpg.format=ssh -c user.signingkey=~/.ssh/release_ed25519.pub tag -s -m v0
 git push origin v0.9.1
 ```
 
+Once all checks of the tag passed, CI creates the GitHub release with the helper
+package, the SBOM and `SHA256SUMS`. Check the package against a local build from the
+tag (`tools/build-helper-deb`, needs dpkg-deb), then sign the checksums with the
+release key and add the signature to the release:
+
+```sh
+curl -fsSLO https://github.com/ramhee98/aptwarden/releases/download/v0.9.1/SHA256SUMS
+grep aptwarden-helper_ SHA256SUMS        # same as sha256sum of the local build
+ssh-keygen -Y sign -f ~/.ssh/release_ed25519 -n aptwarden-release SHA256SUMS
+gh release upload v0.9.1 SHA256SUMS.sig  # or attach it on the release page
+```
+
 CI also runs [bandit](https://bandit.readthedocs.io/) and CodeQL on `src`,
 [pip-audit](https://pypi.org/project/pip-audit/) on the dependencies (on every push and
 weekly), ShellCheck on the root helper, zizmor on the workflow and gitleaks on the
@@ -1163,7 +1219,8 @@ history; see [SECURITY.md](SECURITY.md#security-checks-in-ci). It builds the hel
 package (`tools/build-helper-deb`, twice to check that the build is reproducible) and
 installs, upgrades and removes it in a Debian 13 container
 (`contrib/deb/test-helper-deb`). For release tags it attaches a CycloneDX SBOM (`sbom`
-artifact) and the helper package (`aptwarden-helper-deb` artifact). A change to the
+artifact) and the helper package (`aptwarden-helper-deb` artifact), and publishes both
+as a GitHub release (job `release`, the only job with write access). A change to the
 helper or to `contrib/deb/` raises `HELPER_VERSION`, which is also the package version. Dependabot keeps the pinned action SHAs
 and the hash-pinned CI tools current, proposing a new version only once it is a week
 old (security updates right away).
