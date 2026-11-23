@@ -48,6 +48,8 @@ def test_inventory_over_ssh(target, factory):
         debversion.parse(p.version)
         debversion.parse(p.source_version)
     assert inv.facts["kernel"]
+    # every test host has its release and the security repository in its sources
+    assert {inv.codename, f"{inv.codename}-security"} <= inv.apt_suites()
 
 
 @pytest.mark.parametrize("target", HOSTS[:1])

@@ -169,7 +169,8 @@ def _finding_rows(findings: list[Finding], fixed_column: bool) -> str:
             f'<span class="badge warn">{_e(f.definition)} {_e(f.action)}</span>'
             if f.definition else "",
         ]))
-        last = _e(f.fixed_version or "-") if fixed_column else _e(f.status)
+        last = (_e(f.fixed_version or "-") + _missing_badge(f.missing_source)
+                if fixed_column else _e(f.status))
         rows.append(f"<tr><td>{_vuln_link(f.vuln_id)}</td><td>{_sev(f.severity)}</td>"
                     f'<td class="num">{score}</td><td>{last}</td><td>{flags}</td></tr>')
     return "".join(rows)
@@ -470,7 +471,8 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
             kev = ' <span class="badge bad">KEV</span>' if g.kev else ""
             parts.append(f"<tr><td>{_sev(g.severity)}</td><td>{_e(g.source_package)}</td>"
                          f"<td><code>{_e(g.installed_version)}</code></td>"
-                         f"<td><code>{_e(g.target_version or '?')}</code></td>"
+                         f"<td><code>{_e(g.target_version or '?')}</code>"
+                         f"{_missing_badge(g.missing_source)}</td>"
                          f'<td class="num">{len(g.findings)}</td>'
                          f"<td>{_vuln_link(g.top.vuln_id)}{kev}</td></tr>")
         parts.append("</table></div>")
@@ -512,6 +514,13 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     return "".join(parts)
 
 
+def _missing_badge(repos: str | None) -> str:
+    if not repos:
+        return ""
+    return (f' <span class="badge warn" title="the host\'s apt sources lack {_e(repos)}">'
+            f"needs {_e(repos)}</span>")
+
+
 def _head(*columns: str) -> str:
     """A table's header row; scope tells screen readers the cells are column headers."""
     return "<tr>" + "".join(f'<th scope="col">{_e(c)}</th>' for c in columns) + "</tr>"
@@ -539,7 +548,7 @@ def _attention_items(records: list[tuple[HostRecord, str | None]],
                      tz: str | None) -> list[tuple[tuple[str, ...], str]]:
     """(hosts, html) for everything that needs a human, worst first. A known exploited
     vulnerability is one entry for all its hosts; the others are one entry per host."""
-    failed, scans, aborts = [], [], []
+    failed, scans, sources, aborts = [], [], [], []
     kev: dict[tuple[str, str], list[tuple[str, Finding]]] = {}
     for rec, error in records:
         latest = last_patch[rec.host]
@@ -554,13 +563,17 @@ def _attention_items(records: list[tuple[HostRecord, str | None]],
         for f in rec.findings:
             if f.kev and f.status == FindingStatus.FIXABLE:
                 kev.setdefault((f.vuln_id, f.source_package), []).append((rec.host, f))
+        missing = Counter(f.missing_source for f in rec.findings if f.missing_source)
+        for repos, n in sorted(missing.items()):
+            sources.append(((rec.host,), f"{link}: apt sources lack <code>{_e(repos)}</code>"
+                            f" · {n} fixable vulnerabilities cannot be installed"))
         streak, more = _aborted_streak(history[rec.host])
         if streak >= REPEATED_ABORTS:
             more = "+" if more else ""
             aborts.append(((rec.host,), f"{link}: {_patch_badge('aborted')} "
                            f"{streak}{more} patch runs in a row · "
                            f"{_e(truncate(latest.get('reason', ''), 160))}"))
-    return failed + scans + _kev_items(kev) + aborts
+    return failed + scans + _kev_items(kev) + sources + aborts
 
 
 def _kev_items(kev: dict[tuple[str, str], list[tuple[str, Finding]]]

@@ -179,6 +179,27 @@ def test_needs_attention_and_risk_order(make_config):
         "db01", "mail01", "web01", "crit01", "high01", "aaa01", "app01", "once01"]
 
 
+def test_needs_attention_for_missing_sources(make_config):
+    cfg = make_config(hosts=[{"name": "web01"}, {"name": "old01"}])
+    state = State(cfg.state_dir / "state.db")
+    seed(state)
+    save_scan(state, "old01", [
+        Finding(f"CVE-2026-{i}", "curl", "8.1-1", FindingStatus.FIXABLE, fixed_version="8.1-2",
+                severity=Severity.HIGH, missing_source="trixie-security") for i in (8, 9)])
+    st = statuspage.collect(cfg, state)
+    page = statuspage.render(cfg, state, st=st)
+    state.close()
+    attention = page.split("<h2>Needs attention</h2>")[1].split("<h2>Hosts</h2>")[0]
+    assert ('<a href="#old01">old01</a>: apt sources lack <code>trixie-security</code> · '
+            "2 fixable vulnerabilities cannot be installed") in attention
+    assert "web01</a>: apt sources" not in attention
+    details = page.split('id="old01"')[1]
+    assert '8.1-2</code> <span class="badge warn"' in details and "needs trixie-security" \
+        in details
+    old01 = next(h for h in statuspage.status_json(st)["hosts_detail"] if h["name"] == "old01")
+    assert old01["needs_attention"] == 1 and old01["fixable"] == 2
+
+
 def kev(vuln_id, package, fixed, severity=Severity.CRITICAL):
     return Finding(vuln_id, package, "1", FindingStatus.FIXABLE, fixed_version=fixed,
                    severity=severity, kev=True)

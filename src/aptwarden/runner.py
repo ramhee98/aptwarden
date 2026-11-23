@@ -18,7 +18,7 @@ from aptwarden.enrich import enrich
 from aptwarden.enrich.cvss import CvssLookup
 from aptwarden.enrich.kev import Kev
 from aptwarden.http import HttpClient
-from aptwarden.matcher import merge
+from aptwarden.matcher import mark_missing_sources, merge
 from aptwarden.models import Finding, HostInventory
 from aptwarden.notify import Dispatcher, HostChanges, Notifier
 from aptwarden.patch import window
@@ -85,8 +85,16 @@ class RunReport:
         return any(s.ok for s in self.sources if s.name in CORE_SOURCES)
 
 
-def host_notes(inv: HostInventory) -> list[str]:
+def host_notes(inv: HostInventory, findings: list[Finding] | None = None) -> list[str]:
     notes = []
+    missing: dict[str, list[Finding]] = {}
+    for f in findings or []:
+        if f.missing_source:
+            missing.setdefault(f.missing_source, []).append(f)
+    for repos, found in sorted(missing.items()):
+        packages = len({f.source_package for f in found})
+        notes.append(f"apt sources lack {repos}: {len(found)} fixable vulnerabilities in "
+                     f"{packages} packages cannot be installed until it is added")
     if inv.facts.get("reboot_required") == "yes":
         notes.append("reboot required")
     if inv.facts.get("unattended_upgrade_periodic", "0") not in ("", "0"):
@@ -213,6 +221,11 @@ class Runner:
             inv.host: merge([(prio, res.get(inv.host, [])) for prio, res in per_source])
             for inv in inventories
         }
+        tracker = next((s for s in self.sources if s.name == "debian_tracker"), None)
+        if tracker is not None and tracker.has_data():
+            for inv in inventories:
+                mark_missing_sources(findings[inv.host], inv.apt_suites(),
+                                     lambda src, rel=inv.codename: tracker.repositories(src, rel))
         enrich(findings, self.cvss, self.kev)
         if self.cvss is not None and self.cvss.pending:
             run.notes.append(f"{self.cvss.pending} CVEs still waiting for a CVSS lookup "
@@ -232,7 +245,8 @@ class Runner:
                             for w in getattr(src, "host_warnings", {}).get(name, [])]
                 self.state.mark_seen(name, findings[name])
                 record = HostRecord(run.run_id, name, h.address, True, None, result.summary(),
-                                    warnings + host_notes(result), result.collected_at,
+                                    warnings + host_notes(result, findings[name]),
+                                    result.collected_at,
                                     findings[name])
             self.state.save_host(run.run_id, record)
             run.hosts.append(record)

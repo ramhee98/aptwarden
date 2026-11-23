@@ -81,11 +81,22 @@ class FakeTransport(Transport):
         self.closed = True
 
 
+TRIXIE_SUITES = ("trixie", "trixie-updates", "trixie-security")
+
+
+def indextargets_output(suites=TRIXIE_SUITES) -> str:
+    """``apt-get indextargets`` with APT_TARGETS_FORMAT for these suites."""
+    return "".join(f"deb|{ident}|{s}|{s}\n" for s in suites
+                   for ident in ("Packages", "Translations"))
+
+
 def debian_host_commands(dpkg_output: str | None = None,
-                         os_release: str | None = None) -> dict:
-    from aptwarden.inventory import DPKG_FORMAT
+                         os_release: str | None = None, apt_suites=TRIXIE_SUITES) -> dict:
+    from aptwarden.inventory import APT_TARGETS_FORMAT, DPKG_FORMAT
 
     return {
+        ("apt-get", "indextargets", f"--format={APT_TARGETS_FORMAT}"):
+            (0, indextargets_output(apt_suites), ""),
         ("cat", "/etc/os-release"): (0, os_release or fixture_text("os-release-trixie.txt"), ""),
         ("dpkg-query", "-W", f"-f={DPKG_FORMAT}"):
             (0, dpkg_output or fixture_text("dpkg-query-trixie.txt"), ""),

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
+from aptwarden import debversion
 from aptwarden.models import Finding, FindingStatus
 
 
@@ -32,3 +34,30 @@ def merge(per_source: list[tuple[int, list[Finding]]]) -> list[Finding]:
     # A custom definition saying "not affected" overrules every other source.
     kept = (f for f in merged.values() if f.status != FindingStatus.NOT_AFFECTED)
     return sorted(kept, key=lambda f: f.key)
+
+
+def mark_missing_sources(findings: list[Finding], suites: set[str] | None,
+                         repositories: Callable[[str], dict[str, str]]) -> None:
+    """Set ``missing_source`` on fixable findings whose fixed version is only in
+    repositories the host's apt sources lack (typically ``<codename>-security``).
+
+    The status stays ``fixable``: the fix exists, the host has to add the source.
+    ``repositories(source_package)`` gives the newest version per repository of the
+    host's release. Unknown suites or repositories leave the findings alone.
+    """
+    if not suites:
+        return
+    cache: dict[str, dict[str, str]] = {}
+    for f in findings:
+        f.missing_source = None
+        if f.status != FindingStatus.FIXABLE or not f.fixed_version:
+            continue
+        if f.source_package not in cache:
+            cache[f.source_package] = repositories(f.source_package)
+        try:
+            having = [repo for repo, version in cache[f.source_package].items()
+                      if debversion.compare(version, f.fixed_version) >= 0]
+        except ValueError:
+            continue
+        if having and not any(repo in suites for repo in having):
+            f.missing_source = ", ".join(sorted(having))

@@ -75,6 +75,12 @@ class HostInventory:
             result[(p.source, p.source_version)].append(p.name)
         return dict(result)
 
+    def apt_suites(self) -> set[str] | None:
+        """Suites of the host's Debian package sources (``trixie``,
+        ``trixie-security``, ...), or None if they could not be read."""
+        value = self.facts.get("apt_suites")
+        return None if value is None else set(value.split())
+
     def summary(self) -> dict:
         return {
             "os_id": self.os_id,
@@ -109,6 +115,9 @@ class Finding:
     first_seen: str | None = None
     definition: str | None = None  # id of the custom definition that decided this finding
     action: str | None = None  # the definition's action: report | auto-patch | block
+    # fixable, but the fixed version is only in these repositories (e.g. "trixie-security"),
+    # and the host's apt sources lack them
+    missing_source: str | None = None
 
     @property
     def key(self) -> tuple[str, str, str]:

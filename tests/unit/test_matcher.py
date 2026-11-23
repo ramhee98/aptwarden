@@ -1,4 +1,4 @@
-from aptwarden.matcher import merge
+from aptwarden.matcher import mark_missing_sources, merge
 from aptwarden.models import Finding, FindingStatus
 
 
@@ -25,3 +25,29 @@ def test_distinct_vulns_are_kept_and_inputs_untouched():
     assert [m.vuln_id for m in merged] == ["CVE-1", "CVE-2"]
     merged[0].origins.append("x")
     assert a.origins == ["debian_tracker"]
+
+
+REPOS = {"openssl": {"trixie": "1.0-1", "trixie-security": "2.0-1"},
+         "tar": {"trixie": "2.0-1", "trixie-security": "2.0-1"}}
+
+
+def test_mark_missing_sources():
+    only_security = f("CVE-1", "debian_tracker")
+    in_main = Finding("CVE-2", "tar", "1.0-1", FindingStatus.FIXABLE, fixed_version="2.0-1")
+    pending = f("CVE-3", "debian_tracker", FindingStatus.FIX_PENDING, "3.0-1")
+    no_repos = Finding("CVE-4", "vim", "1.0-1", FindingStatus.FIXABLE, fixed_version="2.0-1")
+    findings = [only_security, in_main, pending, no_repos]
+    mark_missing_sources(findings, {"trixie", "trixie-updates"}, lambda s: REPOS.get(s, {}))
+    assert only_security.missing_source == "trixie-security"
+    assert in_main.missing_source is None  # the point release brought it to trixie too
+    assert pending.missing_source is None
+    assert no_repos.missing_source is None  # unknown to the tracker: not judged
+
+    mark_missing_sources(findings, {"trixie", "trixie-security"}, lambda s: REPOS.get(s, {}))
+    assert only_security.missing_source is None  # cleared once the source is there
+
+
+def test_mark_missing_sources_with_unknown_suites():
+    finding = f("CVE-1", "debian_tracker")
+    mark_missing_sources([finding], None, lambda s: REPOS[s])
+    assert finding.missing_source is None

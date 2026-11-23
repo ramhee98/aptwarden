@@ -30,6 +30,13 @@ _VERSION = re.compile(r"[A-Za-z0-9.+~:-]+")
 _ARCH = re.compile(r"[a-z0-9-]+")
 _STATUS = re.compile(r"[a-zA-Z ]{2,3}")
 
+# The host's configured package indexes, as apt itself sees them: one-line and deb822
+# sources, disabled entries and options are already resolved. The codename comes from
+# the downloaded Release file (so "stable-security" turns into "trixie-security"), the
+# release from the sources entry, which is all there is before the first apt update.
+APT_TARGETS_FORMAT = "$(TARGET_OF)|$(IDENTIFIER)|$(CODENAME)|$(RELEASE)"
+_SUITE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+~_/-]*")
+
 # Read-only facts, printed as key=value lines. A constant script, no input is
 # interpolated.
 FACTS_SCRIPT = r"""
@@ -100,6 +107,19 @@ def parse_facts(text: str) -> dict[str, str]:
     return facts
 
 
+def parse_apt_suites(text: str) -> list[str]:
+    """Suites of the binary package indexes from ``apt-get indextargets``."""
+    suites = set()
+    for line in text.splitlines():
+        parts = line.split("|")
+        if len(parts) != 4 or parts[0] != "deb" or parts[1] != "Packages":
+            continue
+        name = parts[2] or parts[3]
+        if _SUITE.fullmatch(name):  # skips flat repositories ("./") and garbage
+            suites.add(name)
+    return sorted(suites)
+
+
 def collect(transport: Transport) -> HostInventory:
     try:
         osr = transport.run(["cat", "/etc/os-release"])
@@ -115,6 +135,11 @@ def collect(transport: Transport) -> HostInventory:
         debian_version = transport.run(["cat", "/etc/debian_version"]).stdout.strip()
         facts_result = transport.run(["sh", "-c", FACTS_SCRIPT])
         facts = parse_facts(facts_result.stdout) if facts_result.ok else {}
+        targets = transport.run(["apt-get", "indextargets", f"--format={APT_TARGETS_FORMAT}"])
+        suites = parse_apt_suites(targets.stdout) if targets.ok else []
+        # no suites at all means apt could not tell (e.g. too old): then nothing is checked
+        if suites:
+            facts["apt_suites"] = " ".join(suites)
     except TransportError as e:
         raise InventoryError(str(e)) from e
 

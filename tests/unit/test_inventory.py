@@ -1,8 +1,10 @@
 import pytest
 
 from aptwarden.inventory import (
+    APT_TARGETS_FORMAT,
     InventoryError,
     collect,
+    parse_apt_suites,
     parse_dpkg_query,
     parse_facts,
     parse_os_release,
@@ -113,3 +115,33 @@ def test_collect_wraps_transport_errors():
 
     with pytest.raises(InventoryError, match="Connection refused"):
         collect(Broken("x", {}))
+
+
+def test_parse_apt_suites():
+    text = (
+        # Release file read: the codename wins over the sources entry's "stable-security"
+        "deb|Packages|trixie-security|stable-security\n"
+        "deb|Translations|trixie-security|stable-security\n"
+        # before the first apt update there is no codename, only the sources entry
+        "deb|Packages||trixie\n"
+        "deb|Packages|trixie-updates|trixie-updates\n"
+        "deb-src|Sources|forky|forky\n"       # source packages are not installed from
+        "deb|Packages||./\n"                  # flat repository
+        "deb|Packages|bad\x1b[2J|bad\n"       # garbage from the host
+        "noise\n"
+    )
+    assert parse_apt_suites(text) == ["trixie", "trixie-security", "trixie-updates"]
+
+
+def test_collect_apt_suites():
+    inv = collect(FakeTransport("web01", debian_host_commands(apt_suites=("trixie",))))
+    assert inv.facts["apt_suites"] == "trixie"
+    assert inv.apt_suites() == {"trixie"}
+
+
+def test_collect_without_apt_suites():
+    cmds = debian_host_commands()
+    del cmds[("apt-get", "indextargets", f"--format={APT_TARGETS_FORMAT}")]
+    inv = collect(FakeTransport("web01", cmds))  # e.g. apt too old for indextargets
+    assert "apt_suites" not in inv.facts
+    assert inv.apt_suites() is None

@@ -41,7 +41,10 @@ aptwarden report
 - **Version comparison** is a pure Python port of dpkg's algorithm. It is tested against
   4000+ cases generated with `dpkg --compare-versions`.
 - **Each finding gets one status:**
-  - `fixable`: the fix is in the release's repositories
+  - `fixable`: the fix is in the release's repositories. If it is only in a repository
+    the host's apt sources lack (usually `<codename>-security`), it stays `fixable` but
+    is marked `needs trixie-security`, and the host gets a warning. See
+    [Missing security sources](#missing-security-sources).
   - `fix-pending`: fixed in Debian but not published yet, e.g. it waits for the next
     point release
   - `no-fix`: open in this release
@@ -49,6 +52,33 @@ aptwarden report
 - **Severity:** Debian `unimportant` wins first, then the CVSS base score, then Debian's
   urgency. CVSS vectors come from OSV, and NVD is the rate-limited fallback.
 - **CISA KEV:** CVEs in the KEV catalog are flagged and always shown.
+
+### Missing security sources
+
+Debian publishes most security fixes in `<codename>-security` first, and adds them to
+the release itself only with the next point release. A host whose apt sources lack
+`trixie-security` cannot install those fixes. Each scan reads the host's package sources
+with `apt-get indextargets`, which needs no root and resolves one-line and deb822 files,
+disabled entries and aliases like `stable-security`. aptwarden then compares the suites
+with the repositories the Debian tracker lists for the fix:
+
+- **The finding stays `fixable`** and still counts in the totals, alerts and mails. A
+  host that cannot install its fixes should not look healthier than one that can.
+- **It is marked** `needs trixie-security` in the report (`FIXED` column), on the status
+  page and in `findings[].missing_source` of the JSON output.
+- **The host gets a warning**, e.g. `apt sources lack trixie-security: 12 fixable
+  vulnerabilities in 4 packages cannot be installed until it is added`. It appears in
+  the report, the summary mail and the status page, which also lists it under **Needs
+  attention**.
+- **`hosts check` notes** `apt sources lack trixie-security` for every host without it
+  (not for sid), even before a vulnerability is affected. It notes `apt sources unknown`
+  when apt cannot list its sources (apt older than 1.1).
+- **Patch previews hold these packages back.** The patch run itself skips them anyway,
+  because apt offers no candidate.
+
+Only the suite names are compared, so a local mirror counts as long as it keeps them.
+Before the first `apt update` on a host, apt knows only the names written in its
+sources; an alias like `stable-security` there is not resolved to the codename.
 
 ## Requirements
 
@@ -709,6 +739,9 @@ to its details:
   (`rolled-back` is not listed: the host is back on its snapshot. An `aptwarden
   rollback` also ends as `rolled-back` and clears the entry)
 - hosts whose last scan failed
+- hosts with fixable vulnerabilities in a repository their apt sources lack, e.g.
+  "web01: apt sources lack trixie-security · 12 fixable vulnerabilities cannot be
+  installed" (see [Missing security sources](#missing-security-sources))
 - fixable known exploited (KEV) vulnerabilities, one entry per vulnerability and
   package with all hosts that have it, e.g. "KEV CVE-2026-10 critical in brotli, fixed
   in 1.1.0-2+deb13u1 — web01, web02". If the hosts need different fixed versions (for
@@ -757,7 +790,8 @@ inside a window, `any time` without windows) and a preview such as `would patch:
 inetutils (2 critical, 1 high)`: the source packages and the number of vulnerabilities per
 severity. The preview applies the planner's selection to the fixable findings of the last
 scan: `auto_patch_severities`, `auto_patch_kev`, definitions restricting a vulnerability
-to `report`, and `block` definitions covering the fixed version (listed as held back). It
+to `report`, `block` definitions covering the fixed version, and fixes only in a
+repository the host's apt sources lack (both listed as held back). It
 reads only `state.db`, with no SSH connection and no apt simulation, so the patch run can
 still hold back a package once it sees the apt candidates (mirror behind, blocked
 candidate). Changes after the last scan appear with the next report run. In the hosts
@@ -890,9 +924,10 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 - **Matching is per source package, like debsecan.** When a vulnerability affects only
   one binary of a source package (e.g. `inetutils-telnetd`), every installed binary of
   that source is reported.
-- **Fix availability comes from the Debian repositories,** not from the host's apt
-  configuration. A host without `*-security` in its sources cannot install a fix marked
-  `fixable`.
+- **Fix availability comes from the Debian repositories.** aptwarden checks that the
+  host's sources include the repository with the fix (see
+  [Missing security sources](#missing-security-sources)), but not whether a mirror is
+  up to date or a package is pinned away.
 - **No CVSS v4 calculation yet:** v4-only CVEs need NVD for a score.
 - **Docker images are not scanned yet** (planned as a Trivy plugin).
 - **PVE nodes are report-only by design:** Proxmox requires `apt full-upgrade`, and

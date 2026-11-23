@@ -206,6 +206,19 @@ class DebianTrackerSource(Source):
                 )
         return findings
 
+    def repositories(self, source: str, release: str) -> dict[str, str]:
+        """Newest version of a source package per repository of the release, e.g.
+        ``{"trixie": "3.5.1-1", "trixie-security": "3.5.4-1"}``."""
+        newest: dict[str, str] = {}
+        for (repos,) in self.cache.db.execute(
+                "SELECT repositories FROM debian_tracker WHERE source = ? AND release = ?",
+                (source, release)):
+            for repo, version in json.loads(repos).items():
+                if version and (repo not in newest
+                                or debversion.compare(version, newest[repo]) > 0):
+                    newest[repo] = version
+        return newest
+
     def _description(self, vuln_id: str) -> str:
         row = self.cache.db.execute(
             "SELECT description FROM debian_tracker_desc WHERE vuln_id = ?", (vuln_id,)

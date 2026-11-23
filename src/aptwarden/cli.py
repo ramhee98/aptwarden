@@ -298,6 +298,11 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
                 notes.append(key.replace("_", " "))
         if r.facts.get("unattended_upgrade_periodic", "0") not in ("", "0"):
             notes.append("unattended-upgrades active")
+        suites = r.apt_suites()
+        if suites is None:
+            notes.append("apt sources unknown")
+        elif r.codename != "sid" and f"{r.codename}-security" not in suites:
+            notes.append(f"apt sources lack {r.codename}-security")
         if "patch" in h.policy["modes"] or "dry-run" in h.policy["modes"]:
             notes += _patch_readiness(h, runner_cfg=cfg)
         rows.append([h.name, h.address, "ok", f"{r.debian_version} ({r.codename})",

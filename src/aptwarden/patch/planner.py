@@ -69,9 +69,18 @@ def preview(findings: list[Finding], policy: dict, definitions: list[Definition]
             release: str) -> list[PlanItem]:
     """What a patch run would select from stored findings, without asking the
     host: no apt candidates, so an item is only marked skipped when its fixed
-    version itself is blocked by a definition (the run checks the candidate)."""
-    items = group(select(findings, policy))
+    version itself is blocked by a definition or lies in a repository the host's
+    sources lack (the run checks the candidate)."""
+    selected = select(findings, policy)
+    items = group(selected)
+    missing = {(f.source_package, f.installed_version): f.missing_source
+               for f in selected if f.missing_source}
     for item in items:
+        repos = missing.get((item.source_package, item.installed_version))
+        if repos:
+            item.skipped = f"fixed version {item.fixed_version} is only in {repos}, " \
+                           "which the host's apt sources lack"
+            continue
         block = blocked_by(definitions, item.source_package, release, item.fixed_version)
         if block:
             item.skipped = f"fixed version {item.fixed_version} is blocked by {block.id}"

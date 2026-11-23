@@ -433,3 +433,15 @@ def test_preview_filters_like_the_planner():
     # the block applies to its release only
     items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "bookworm")
     assert not any(i.skipped for i in items)
+
+
+def test_preview_holds_back_fixes_from_missing_sources():
+    findings = [fixable("CVE-1", "openssl", Severity.CRITICAL,
+                        missing_source="trixie-security"),
+                fixable("CVE-2", "tar", Severity.CRITICAL)]
+    policy = {"auto_patch_severities": ["critical"], "auto_patch_kev": False}
+    items = preview(findings, policy, [], "trixie")
+    assert [(i.source_package, i.skipped) for i in items] == [
+        ("openssl", "fixed version 2 is only in trixie-security, which the host's apt "
+                    "sources lack"),
+        ("tar", None)]

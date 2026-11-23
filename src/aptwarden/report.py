@@ -37,6 +37,11 @@ class PackageGroup:
         return debversion.max_version(f.fixed_version for f in self.findings if f.fixed_version)
 
     @property
+    def missing_source(self) -> str | None:
+        """Repositories the host lacks for this package's fix, if any."""
+        return next((f.missing_source for f in self.findings if f.missing_source), None)
+
+    @property
     def top(self) -> Finding:
         return max(self.findings, key=_finding_rank)
 
@@ -160,6 +165,8 @@ def _group_table(groups: list[PackageGroup], last_header: str, show_cves: bool,
             last = ",".join(sorted(statuses))
         else:
             last = g.target_version or "?"
+            if g.missing_source:
+                last += f" (needs {g.missing_source})"
         rows.append([str(g.severity), g.source_package, g.installed_version, last,
                      str(len(g.findings)), _top_label(g.top)])
     table = format_table(rows)

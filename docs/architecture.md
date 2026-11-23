@@ -77,6 +77,11 @@ For each installed source package and the host's release:
 | `open` | `no-fix` |
 | `undetermined` | `undetermined` |
 
+A `fixable` finding whose fixed version is only in repositories missing from the host's
+apt sources (read with `apt-get indextargets`, compared by suite name) keeps its status
+and gets `missing_source`, e.g. `trixie-security`. The host gets a warning, and patch
+previews hold the package back.
+
 ### OSV.dev (secondary)
 
 OSV's Debian records (`DEBIAN-CVE-*`) are generated from the Debian tracker. For dpkg

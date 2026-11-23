@@ -69,6 +69,40 @@ def test_report_end_to_end(setup):
     runner.close()
 
 
+def test_report_flags_fixes_from_missing_sources(setup, capsys):
+    from aptwarden import report
+    from aptwarden.models import Severity
+
+    cfg, http, factory = setup
+    factory.transports["web01"] = FakeTransport(
+        "web01", debian_host_commands(apt_suites=("trixie", "trixie-updates")))
+    runner = Runner(cfg, http=http, transports=factory)
+    [web] = runner.report(cfg.select_hosts(["web01"])).hosts
+    fixable = [f for f in web.findings if f.status == FindingStatus.FIXABLE]
+    missing = [f for f in fixable if f.missing_source]
+    # still counted as fixable, but flagged: the fixes are only in trixie-security
+    assert len({f.source_package for f in fixable}) == 28
+    assert missing and {f.missing_source for f in missing} == {"trixie-security"}
+    packages = len({f.source_package for f in missing})
+    assert (f"apt sources lack trixie-security: {len(missing)} fixable vulnerabilities in "
+            f"{packages} packages cannot be installed until it is added") in web.warnings
+    # stored, so the status page and later reports see it
+    stored = runner.state.latest("web01")
+    assert sum(1 for f in stored.findings if f.missing_source) == len(missing)
+    text = report.render_text([web], [], min_severity=Severity.UNKNOWN)
+    assert "(needs trixie-security)" in text
+    runner.close()
+
+
+def test_report_with_security_source_flags_nothing(setup):
+    cfg, http, factory = setup
+    runner = Runner(cfg, http=http, transports=factory)
+    [web] = runner.report(cfg.select_hosts(["web01"])).hosts
+    assert not any(f.missing_source for f in web.findings)
+    assert not any("apt sources lack" in w for w in web.warnings)
+    runner.close()
+
+
 def test_report_without_any_data_fails(setup):
     cfg, http, factory = setup
     http.routes[("GET", TRACKER)] = Response(500)
@@ -118,6 +152,12 @@ def test_cli_report_status_and_exit_codes(setup, tmp_path, monkeypatch, capsys):
     assert cli.main(["-c", str(config_file), "hosts", "check"]) == 1
     out = capsys.readouterr().out
     assert "web01" in out and "FAIL" in out
+    assert "apt sources" not in out  # web01 has trixie-security
+
+    factory.transports["web01"] = FakeTransport(
+        "web01", debian_host_commands(apt_suites=("trixie",)))
+    assert cli.main(["-c", str(config_file), "hosts", "check", "--host", "web01"]) == 0
+    assert "apt sources lack trixie-security" in capsys.readouterr().out
 
     assert cli.main(["-c", str(tmp_path / "missing.yaml"), "status"]) == 2
     assert cli.main(["version"]) == 0

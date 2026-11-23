@@ -5,6 +5,20 @@ commits.
 
 ## Unreleased
 
+### Reporting
+
+- **Fixes a host cannot install are flagged.** A scan now reads the host's package
+  sources (`apt-get indextargets`, no root needed). A fixable vulnerability whose fix is
+  only in a repository the host lacks, usually `trixie-security`, stays `fixable` but is
+  marked `needs trixie-security`, and the host gets a warning such as `apt sources lack
+  trixie-security: 12 fixable vulnerabilities in 4 packages cannot be installed until it
+  is added`. The warning appears in the report, the summary mail and on the status page,
+  which lists it under Needs attention. The JSON output has `missing_source` per finding.
+- **`hosts check` notes `apt sources lack <codename>-security`** for hosts without a
+  security source, and `apt sources unknown` where apt cannot list them.
+- Patch previews on the status page hold back packages whose fix is in a missing
+  source.
+
 ### Status page
 
 - **The patch history shows versions.** Each patched source package is listed with its
