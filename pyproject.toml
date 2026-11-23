@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aptwarden"
 dynamic = ["version"]  # from aptwarden.__version__, the only place to change it
-description = "CVE monitoring and controlled patching for Debian hosts"
+description = "CVE monitoring and controlled patching for Debian and Ubuntu hosts"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

@@ -1,14 +1,14 @@
 # aptwarden architecture
 
-aptwarden runs on one central host. It reaches Debian hosts over SSH, inventories their
-installed packages, matches them against vulnerability data and reports the results. A
-later phase adds patching behind a staged safety net: simulation, snapshot, update,
-healthcheck and rollback.
+aptwarden runs on one central host. It reaches Debian and Ubuntu hosts over SSH,
+inventories their installed packages, matches them against vulnerability data and
+reports the results. A later phase adds patching behind a staged safety net:
+simulation, snapshot, update, healthcheck and rollback.
 
 ## Design principles
 
-- **Core works on any Debian host over SSH.** Proxmox is an optional snapshot provider,
-  not a requirement.
+- **Core works on any Debian or Ubuntu host over SSH.** Proxmox is an optional snapshot
+  provider, not a requirement.
 - **Agentless.** The only thing deployed to target hosts (for patching) is a small
   root-owned helper script. sudo grants access to that script and nothing else.
 - **Few dependencies.** The runtime dependencies are PyYAML and jsonschema. Both are

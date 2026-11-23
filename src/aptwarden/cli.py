@@ -29,7 +29,8 @@ def _add_output_args(p: argparse.ArgumentParser, formats=("text", "json")) -> No
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="aptwarden", description="CVE monitoring and controlled patching for Debian hosts")
+        prog="aptwarden",
+        description="CVE monitoring and controlled patching for Debian and Ubuntu hosts")
     parser.add_argument("-c", "--config", help=f"config file (default: $APTWARDEN_CONFIG or "
                                                f"{config.DEFAULT_PATH})")
     verbosity = parser.add_mutually_exclusive_group()

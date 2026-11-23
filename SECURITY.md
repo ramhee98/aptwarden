@@ -14,7 +14,7 @@ Only the latest release is supported.
 
 ## Threat model
 
-aptwarden runs on one central host. From there it reads package lists of Debian hosts
+aptwarden runs on one central host. From there it reads package lists of Debian and Ubuntu hosts
 over SSH and, for hosts that allow it, installs security updates with a Proxmox snapshot
 as a safety net.
 
@@ -30,7 +30,7 @@ as a safety net.
 | **Status page web server** | serving the status page | The central host pushes `index.html` and `status.json` with a key that `rrsync -wo` limits to writing into one directory. A compromised central host can therefore put any file there, served under `/aptwarden/` with a CSP that blocks scripts, but cannot read or write anything else. The web server has no access to the central host. The page lists open vulnerabilities, so serve it LAN-only with a password. |
 
 **Out of scope:** an attacker who is already root on the central host, a malicious
-Debian mirror (apt's signature checks apply) and denial of service by the configured
+Debian or Ubuntu mirror (apt's signature checks apply) and denial of service by the configured
 data sources beyond the size limits.
 
 ## Minimum privileges

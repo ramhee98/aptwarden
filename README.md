@@ -1,10 +1,11 @@
 # aptwarden
 
-CVE monitoring and controlled patching for Debian hosts.
+CVE monitoring and controlled patching for Debian and Ubuntu hosts.
 
-aptwarden runs on one central host and connects to your Debian servers over SSH. It
-inventories their installed packages and matches them against the Debian Security
-Tracker, OSV.dev and your own signed definitions, scores the findings with CVSS and
+aptwarden runs on one central host and connects to your Debian and Ubuntu servers over
+SSH. It inventories their installed packages and matches them against the Debian
+Security Tracker, OSV.dev (for Ubuntu: Canonical's records, including Ubuntu Pro) and
+your own signed definitions, scores the findings with CVSS and
 CISA KEV, and reports what can be fixed right now. No agent runs on the target hosts,
 and reporting needs no root privileges there.
 
@@ -24,6 +25,7 @@ Where you allow it, aptwarden also patches, behind a staged safety net:
 > - signed custom definitions
 > - patching with Proxmox snapshots and rollback
 > - a static status page
+> - Ubuntu hosts, including Ubuntu Pro fixes (see [Ubuntu hosts](#ubuntu-hosts))
 >
 > Docker image scanning is planned. See [docs/architecture.md](docs/architecture.md).
 
@@ -32,7 +34,8 @@ Where you allow it, aptwarden also patches, behind a staged safety net:
 ```
 aptwarden report
   ├─ refresh feeds   Debian tracker JSON (conditional GET), CISA KEV → cache.db
-  ├─ per host        ssh → dpkg-query, os-release → match → CVSS/KEV → state.db
+  ├─ per host        ssh → dpkg-query, os-release → match (OSV queried live) → CVSS/KEV
+  │                  → state.db
   └─ output          text or JSON report
 ```
 
@@ -79,6 +82,34 @@ with the repositories the Debian tracker lists for the fix:
 Only the suite names are compared, so a local mirror counts as long as it keeps them.
 Before the first `apt update` on a host, apt knows only the names written in its
 sources; an alias like `stable-security` there is not resolved to the codename.
+
+### Ubuntu hosts
+
+Ubuntu hosts are scanned and patched like Debian hosts. The differences:
+
+- **Data comes from OSV only:** Canonical's `UBUNTU-CVE-*` records, queried live for the
+  host's release (`Ubuntu:24.04:LTS`). Keep the `osv` source enabled. If OSV cannot be
+  reached, Ubuntu hosts fail for that run (`no vulnerability data for Ubuntu 24.04 LTS
+  (noble): osv: …`) instead of showing no findings.
+- **Statuses:** a released fix is `fixable`, everything else `no-fix`. There is no
+  `fix-pending` (no point releases) and no `undetermined`.
+- **Ubuntu Pro:** for LTS releases aptwarden also queries Ubuntu Pro's data. It covers
+  universe packages (esm-apps) and, after the end of standard support, the release
+  itself (esm-infra). A fix that only Ubuntu Pro has stays `fixable` and is marked
+  `needs noble-apps-security (Ubuntu Pro)`, like a missing `trixie-security` on Debian
+  (see above), unless the host has Ubuntu Pro attached.
+- **Security notices without a CVE** are reported by their id (`USN-8945-1`) where no
+  CVE record covers them.
+- **Severity:** Ubuntu's priority `negligible` counts like Debian's `unimportant`; the
+  other priorities apply after CVSS, like Debian's urgency.
+- **End of support:** from the host's `/usr/share/distro-info/ubuntu.csv`. After the end
+  of standard support the host gets a warning that fixes come only through Ubuntu Pro.
+- **Only Ubuntu itself:** derivatives such as Linux Mint fail the inventory, because
+  their own repositories are not covered. Debian derivatives (`ID_LIKE=debian`) are
+  scanned as Debian.
+- **Custom definitions** apply to Ubuntu only for named releases (`release: noble`), see
+  [Custom definitions](#custom-definitions).
+- **Ubuntu 26.04 uses sudo-rs** as `sudo`. The helper's sudo rule works with it.
 
 ## Requirements
 
@@ -136,7 +167,8 @@ useradd --system --create-home --shell /bin/sh aptwarden
 install -d -m 700 -o aptwarden -g aptwarden ~aptwarden/.ssh
 echo 'restrict,from="192.0.2.5" ssh-ed25519 AAAA... aptwarden@central' \
     > ~aptwarden/.ssh/authorized_keys
-chown aptwarden: ~aptwarden/.ssh/authorized_keys
+# "aptwarden:" alone sets no group with Ubuntu 26.04's chown (uutils)
+chown aptwarden:aptwarden ~aptwarden/.ssh/authorized_keys
 chmod 600 ~aptwarden/.ssh/authorized_keys
 ```
 
@@ -965,7 +997,7 @@ to its details:
 - fixable known exploited (KEV) vulnerabilities, one entry per vulnerability and
   package with all hosts that have it, e.g. "KEV CVE-2026-10 critical in brotli, fixed
   in 1.1.0-2+deb13u1 — web01, web02". If the hosts need different fixed versions (for
-  example on different Debian releases), the version is given per host.
+  example on different releases), the version is given per host.
 - hosts whose last patch runs were `aborted` at least twice in a row, with the reason.
   An abort with the same reason as the previous run sends no further mail, so the page
   keeps them visible.
@@ -974,7 +1006,8 @@ When none of this applies, the block says "Nothing needs attention".
 
 **Vulnerabilities** has one row per vulnerability with its ID, severity, CVSS score, KEV
 badge, description and the hosts that have it. The ID links to the Debian security
-tracker. The host tables and the Needs attention block show no descriptions: their
+tracker, or to Ubuntu's CVE or notice page where every host listing it runs Ubuntu.
+The host tables and the Needs attention block show no descriptions: their
 vulnerability IDs link to this row instead, so a description shared by many hosts is
 on the page only once. Where the hosts' data differ, the row shows the highest severity
 and score. The section is not collapsible, so these links always land on the row.
@@ -1147,10 +1180,13 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 - **Matching is per source package, like debsecan.** When a vulnerability affects only
   one binary of a source package (e.g. `inetutils-telnetd`), every installed binary of
   that source is reported.
-- **Fix availability comes from the Debian repositories.** aptwarden checks that the
-  host's sources include the repository with the fix (see
+- **Fix availability comes from the Debian tracker and, for Ubuntu Pro, from OSV.**
+  aptwarden checks that the host's sources include the repository with the fix (see
   [Missing security sources](#missing-security-sources)), but not whether a mirror is
   up to date or a package is pinned away.
+- **Ubuntu depends on OSV being reachable,** and Ubuntu's "needs triage" and "deferred"
+  are both reported as `no-fix` (only Canonical's much larger VEX data tells them
+  apart).
 - **No CVSS v4 calculation yet:** v4-only CVEs need NVD for a score.
 - **Docker images are not scanned yet** (planned as a Trivy plugin).
 - **PVE nodes are report-only by design:** Proxmox requires `apt full-upgrade`, and
@@ -1170,7 +1206,8 @@ python3 -m venv --system-site-packages .venv
 ```
 
 - **Fixtures** in `tests/fixtures` are real data: `dpkg-query` output of a Debian 13.1
-  container, a trimmed tracker snapshot, and OSV and NVD responses.
+  container, os-release of Ubuntu 24.04 and 26.04, a trimmed tracker snapshot, and OSV
+  (Debian and Ubuntu) and NVD responses.
   `tools/gen_debversion_cases.py` regenerates the version comparison table with dpkg as
   the oracle.
 - **Integration tests** run against disposable hosts only. Never point them at

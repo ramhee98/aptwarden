@@ -5,6 +5,18 @@ commits.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **No helper or configuration change is needed.** Ubuntu hosts are added like Debian
+  hosts (see the README, "Ubuntu hosts"); keep the `osv` source enabled, it is their
+  only source. Helper 4 works on Ubuntu 24.04 and 26.04 (sudo-rs) as it is.
+- **A host that no source covers now fails** instead of showing 0 findings with a
+  warning. A Debian host is affected only if its release is missing from the tracker
+  and OSV is disabled, or in `--offline` runs with an empty tracker cache.
+- **Definitions:** `release: any` keeps covering every Debian release. Definitions for
+  Ubuntu name their releases, and older central hosts accept them (they warn about an
+  unknown release).
+
 ### Ubuntu
 
 - **Ubuntu hosts are scanned through OSV.** The `osv` source queries Canonical's
@@ -13,28 +25,14 @@ commits.
   record is published, so the finding is `fixable`; without a fix it is `no-fix`.
   Tested on Ubuntu 24.04 and 26.04: every fixable finding had an apt candidate that
   reaches the fix.
-- **Patching Ubuntu hosts works unchanged:** tested on 24.04 (87 packages) and 26.04
-  (57 packages, sudo-rs as `sudo`) in Proxmox LXCs with snapshot, needrestart, ssh,
-  systemd and HTTP healthchecks, and a rollback on both. The helper needs no change.
-- **A fix only in a repository the host lacks** (e.g. Ubuntu Pro) is skipped by patch
-  runs with that reason, `fixed version … is only in noble-apps-security (Ubuntu Pro),
-  which the host's apt sources lack`, instead of guessing at mirrors and point
-  releases.
 - **Ubuntu Pro.** OSV's Pro ecosystem (`Ubuntu:Pro:24.04:LTS`) is queried as well. It
   is not an addition to the release's data but covers other packages: universe
-  packages in esm-apps (223 on 24.04, e.g. 7zip, catdoc), which looked clean before,
-  and on releases past standard support the release's fixes (esm-infra). A Pro fix
+  packages in esm-apps (223 on 24.04, e.g. 7zip, catdoc), which the release's data
+  does not cover, and on releases past standard support the release's fixes
+  (esm-infra). A Pro fix
   stays `fixable` and is marked `needs noble-apps-security (Ubuntu Pro)` (report,
   status page, host warning, held back by patch previews) unless the host's apt
   sources include that pocket, the same way as a missing `trixie-security` on Debian.
-- **OSV failures fail Ubuntu hosts.** OSV is their only source, so when its query
-  fails they fail with `no vulnerability data for Ubuntu 24.04 LTS (noble): osv: …`
-  instead of showing 0 findings.
-- **End of support.** The inventory reads the host's
-  `/usr/share/distro-info/ubuntu.csv`. Past standard support, the host gets a warning
-  (also in `hosts check`): `Ubuntu 20.04 LTS (focal) is out of standard support since
-  2025-05-29: security fixes only through Ubuntu Pro (ESM until 2030-04-23)`, and
-  after that, or for interim releases, `out of support … no security fixes`.
 - **Security notices without a CVE.** Some Ubuntu fixes exist only as a USN (e.g.
   xz-utils USN-8945-1, sudo-rs USN-8708-1, ca-certificates updates). A USN is reported
   as `USN-…` where no CVE record of the package covers one of its CVEs; regression
@@ -42,6 +40,14 @@ commits.
 - **Severity:** Ubuntu's priority `negligible` counts like Debian's `unimportant`
   (`low`, before CVSS); `low` to `critical` are used after CVSS like Debian's urgency.
   The reason says `ubuntu priority: medium`.
+- **End of support.** The inventory reads the host's
+  `/usr/share/distro-info/ubuntu.csv`. Past standard support, the host gets a warning
+  (also in `hosts check`): `Ubuntu 20.04 LTS (focal) is out of standard support since
+  2025-05-29: security fixes only through Ubuntu Pro (ESM until 2030-04-23)`, and
+  after that, or for interim releases, `out of support … no security fixes`.
+- **OSV failures fail Ubuntu hosts.** OSV is their only source, so when its query
+  fails they fail with `no vulnerability data for Ubuntu 24.04 LTS (noble): osv: …`
+  instead of showing 0 findings.
 - **Links:** on Ubuntu hosts, CVEs link to `ubuntu.com/security/CVE-…` in alert mails
   and on the status page (where every host listing the CVE runs Ubuntu), USNs to
   `ubuntu.com/security/notices/`.
@@ -53,6 +59,13 @@ commits.
 - **A Pro marker survives a definition:** when a definition decides a finding and
   names the same fixed version as OSV, the finding keeps OSV's `needs …-security
   (Ubuntu Pro)`.
+- **Patching Ubuntu hosts works unchanged:** tested on 24.04 (87 packages) and 26.04
+  (57 packages, sudo-rs as `sudo`) in Proxmox LXCs with snapshot, needrestart, ssh,
+  systemd and HTTP healthchecks, and a rollback on both. The helper needs no change.
+- **A fix only in a repository the host lacks** (e.g. Ubuntu Pro) is skipped by patch
+  runs with that reason, `fixed version … is only in noble-apps-security (Ubuntu Pro),
+  which the host's apt sources lack`, instead of guessing at mirrors and point
+  releases.
 - **OSV skips withdrawn records**, and a record without any entry for the queried
   ecosystem and package no longer counts as affecting it (OSV matches ecosystems
   loosely).
