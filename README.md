@@ -142,7 +142,7 @@ python3 -m venv --system-site-packages /opt/aptwarden
 # a release tag, not the latest commit of main (see "Installing a verified release")
 # --no-build-isolation: build with Debian's setuptools, so PyPI is never contacted
 /opt/aptwarden/bin/pip install --no-deps --no-build-isolation \
-    git+https://github.com/ramhee98/aptwarden@v0.9.1
+    git+https://github.com/ramhee98/aptwarden@v0.10.0
 # or from a wheel built with `pip wheel --no-deps -w dist .`
 ln -s /opt/aptwarden/bin/aptwarden /usr/local/bin/aptwarden
 
@@ -214,7 +214,7 @@ the service and the publish unit can no longer read. Read-only commands such as
 
 ```sh
 /opt/aptwarden/bin/pip install --no-deps --no-build-isolation \
-    git+https://github.com/ramhee98/aptwarden@v0.9.1
+    git+https://github.com/ramhee98/aptwarden@v0.10.0
 aptwarden version && aptwarden config check
 runuser -u aptwarden -- aptwarden hosts check
 ```
@@ -232,8 +232,8 @@ Notes on updating:
   git clone --quiet https://github.com/ramhee98/aptwarden /root/aptwarden-src
   git -C /root/aptwarden-src -c gpg.format=ssh \
       -c gpg.ssh.allowedSignersFile=/etc/aptwarden/release_signers \
-      -c gpg.openpgp.program=false -c gpg.x509.program=false verify-tag v0.9.1
-  git -C /root/aptwarden-src checkout --quiet v0.9.1
+      -c gpg.openpgp.program=false -c gpg.x509.program=false verify-tag v0.10.0
+  git -C /root/aptwarden-src checkout --quiet v0.10.0
   /opt/aptwarden/bin/pip install --no-deps --no-build-isolation /root/aptwarden-src
   ```
 
@@ -1075,7 +1075,7 @@ vulnerability texts or addresses.
 ```json
 {"generated_at": "2026-11-02T06:00:12Z", "last_run": "20261102T060001Z-3f9a",
  "hosts": 7, "hosts_failing": 0, "fixable": 12, "critical": 0, "high": 3, "kev": 0,
- "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.9.1",
+ "needs_attention": 0, "not_scanned": 0, "aptwarden": "0.10.0",
  "hosts_detail": [{"name": "web01", "scan_ok": true, "scanned_at": "2026-11-02T06:00:05Z",
                    "last_patch": "patched", "last_patch_at": "2026-10-30T02:00:41Z",
                    "fixable": 2, "critical": 0, "high": 1, "kev": 0,
@@ -1240,8 +1240,8 @@ configuration or `status.json`, the patch version for fixes, then tag the commit
 signed so that installations can verify it:
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=~/.ssh/release_ed25519.pub tag -s -m v0.9.1 v0.9.1
-git push origin v0.9.1
+git -c gpg.format=ssh -c user.signingkey=~/.ssh/release_ed25519.pub tag -s -m v0.10.0 v0.10.0
+git push origin v0.10.0
 ```
 
 Once all checks of the tag passed, CI creates the GitHub release with the helper
@@ -1250,10 +1250,10 @@ tag (`tools/build-helper-deb`, needs dpkg-deb), then sign the checksums with the
 release key and add the signature to the release:
 
 ```sh
-curl -fsSLO https://github.com/ramhee98/aptwarden/releases/download/v0.9.1/SHA256SUMS
+curl -fsSLO https://github.com/ramhee98/aptwarden/releases/download/v0.10.0/SHA256SUMS
 grep aptwarden-helper_ SHA256SUMS        # same as sha256sum of the local build
 ssh-keygen -Y sign -f ~/.ssh/release_ed25519 -n aptwarden-release SHA256SUMS
-gh release upload v0.9.1 SHA256SUMS.sig  # or attach it on the release page
+gh release upload v0.10.0 SHA256SUMS.sig  # or attach it on the release page
 ```
 
 CI also runs [bandit](https://bandit.readthedocs.io/) and CodeQL on `src`,
