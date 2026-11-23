@@ -155,11 +155,17 @@ class DebianTrackerSource(Source):
             )
         return len(rows)
 
+    def covers(self, inv: HostInventory) -> bool:
+        return inv.distro == "debian" and inv.codename in self.releases()
+
     def match(self, inventories: list[HostInventory]) -> dict[str, list[Finding]]:
         self.host_warnings = {}
         known_releases = self.releases()
         result = {}
         for inv in inventories:
+            if inv.distro != "debian":
+                result[inv.host] = []  # other distributions have their own sources
+                continue
             if inv.codename not in known_releases:
                 self.host_warnings.setdefault(inv.host, []).append(
                     f"release {inv.codename!r} is not covered by the Debian tracker"

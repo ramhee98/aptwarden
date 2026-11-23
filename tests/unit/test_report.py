@@ -106,3 +106,14 @@ def test_version_change():
     # an item stored before its candidate was resolved
     assert version_change({"source_package": "curl", "installed": "8.14.1-2",
                                   "target_source_version": None}) == ("curl", "8.14.1-2 -> ?")
+
+
+def test_host_header_shows_the_release():
+    # summaries stored before 0.10 have neither distro nor os_version
+    assert "web01  192.0.2.10  Debian 13.1 (trixie)  249 packages" in render_text(
+        [host([])], SOURCES, min_severity=Severity.LOW)
+    ubuntu = host([])
+    ubuntu.summary = {"distro": "ubuntu", "os_version": "24.04.3 LTS", "codename": "noble",
+                      "debian_version": "trixie/sid", "package_count": 300}
+    assert "Ubuntu 24.04.3 LTS (noble)  300 packages" in render_text(
+        [ubuntu], SOURCES, min_severity=Severity.LOW)

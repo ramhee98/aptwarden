@@ -1,4 +1,4 @@
-"""Package inventory of a Debian host. Needs no privileges."""
+"""Package inventory of a Debian or Ubuntu host. Needs no privileges."""
 
 from __future__ import annotations
 
@@ -107,17 +107,52 @@ def parse_facts(text: str) -> dict[str, str]:
     return facts
 
 
-def parse_apt_suites(text: str) -> list[str]:
-    """Suites of the binary package indexes from ``apt-get indextargets``."""
+def parse_apt_suites(text: str, distro: str = "debian") -> list[str]:
+    """Suites of the binary package indexes from ``apt-get indextargets``.
+
+    Debian: the codename from the Release file, so an alias like ``stable-security``
+    resolves to ``trixie-security``. Ubuntu's Release files carry the bare codename
+    for every pocket (``Codename: noble`` in noble-security), so there the suite of
+    the sources entry counts. Ubuntu has no aliases like ``stable``.
+    """
     suites = set()
     for line in text.splitlines():
         parts = line.split("|")
         if len(parts) != 4 or parts[0] != "deb" or parts[1] != "Packages":
             continue
-        name = parts[2] or parts[3]
+        name = parts[3] if distro == "ubuntu" else (parts[2] or parts[3])
         if _SUITE.fullmatch(name):  # skips flat repositories ("./") and garbage
             suites.add(name)
     return sorted(suites)
+
+
+def detect_distro(os_release: dict[str, str]) -> str:
+    """``debian`` or ``ubuntu``. Debian derivatives (``ID_LIKE=debian``) count as
+    Debian, as before. Ubuntu derivatives (Mint, Pop!_OS, ...) are refused: their
+    own repositories are not covered by Ubuntu's data, so they would look cleaner
+    than they are."""
+    os_id = os_release.get("ID", "")
+    like = os_release.get("ID_LIKE", "").split()
+    if os_id in ("debian", "ubuntu"):
+        return os_id
+    if "ubuntu" in like:
+        raise InventoryError(f"unsupported distribution: {os_id!r} is based on Ubuntu, "
+                             "only Ubuntu itself is supported")
+    if "debian" in like:
+        return "debian"
+    raise InventoryError(f"not a Debian based system (ID={os_id!r})")
+
+
+def os_version(distro: str, os_release: dict[str, str], debian_version: str) -> str:
+    """The version to show: Debian's point release from /etc/debian_version
+    ("13.1"), Ubuntu's from PRETTY_NAME ("24.04.3 LTS"; VERSION lacks the point
+    release and, on 26.04, "LTS")."""
+    if distro == "ubuntu":
+        pretty, name = os_release.get("PRETTY_NAME", ""), os_release.get("NAME", "")
+        if name and pretty.startswith(name + " "):
+            return pretty[len(name) + 1:]
+        return os_release.get("VERSION_ID", "")
+    return debian_version or os_release.get("VERSION_ID", "")
 
 
 def collect(transport: Transport) -> HostInventory:
@@ -126,8 +161,7 @@ def collect(transport: Transport) -> HostInventory:
         if not osr.ok:
             osr = transport.run(["cat", "/usr/lib/os-release"]).check()
         os_release = parse_os_release(osr.stdout)
-        if os_release.get("ID") != "debian" and "debian" not in os_release.get("ID_LIKE", ""):
-            raise InventoryError(f"not a Debian based system (ID={os_release.get('ID')!r})")
+        distro = detect_distro(os_release)
 
         dpkg = transport.run(["dpkg-query", "-W", f"-f={DPKG_FORMAT}"]).check()
         packages = parse_dpkg_query(dpkg.stdout)
@@ -136,7 +170,7 @@ def collect(transport: Transport) -> HostInventory:
         facts_result = transport.run(["sh", "-c", FACTS_SCRIPT])
         facts = parse_facts(facts_result.stdout) if facts_result.ok else {}
         targets = transport.run(["apt-get", "indextargets", f"--format={APT_TARGETS_FORMAT}"])
-        suites = parse_apt_suites(targets.stdout) if targets.ok else []
+        suites = parse_apt_suites(targets.stdout, distro) if targets.ok else []
         # no suites at all means apt could not tell (e.g. too old): then nothing is checked
         if suites:
             facts["apt_suites"] = " ".join(suites)
@@ -156,6 +190,8 @@ def collect(transport: Transport) -> HostInventory:
         os_version_id=os_release.get("VERSION_ID", ""),
         codename=codename,
         debian_version=debian_version,
+        distro=distro,
+        os_version=os_version(distro, os_release, debian_version),
         arch=arch,
         packages=packages,
         facts=facts,
@@ -163,6 +199,7 @@ def collect(transport: Transport) -> HostInventory:
     )
     log.info(
         "inventory collected",
-        extra={"host": inv.host, "codename": codename, "packages": len(packages)},
+        extra={"host": inv.host, "distro": distro, "codename": codename,
+               "packages": len(packages)},
     )
     return inv

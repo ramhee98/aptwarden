@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from aptwarden import debversion
-from aptwarden.models import Finding, FindingStatus, Severity
+from aptwarden.models import Finding, FindingStatus, Severity, release_label
 from aptwarden.sources import CORE_SOURCES, SourceStatus
 from aptwarden.state import HostRecord
 
@@ -112,8 +112,8 @@ def render_host(rec: HostRecord, min_severity: Severity, show_all: bool,
     s = rec.summary
     if not rec.ok:
         return [f"{rec.host}  {rec.address or ''}", f"  ERROR: {rec.error}", ""]
-    header = (f"{rec.host}  {rec.address or ''}  Debian {s.get('debian_version', '?')} "
-              f"({s.get('codename', '?')})  {s.get('package_count', 0)} packages  "
+    header = (f"{rec.host}  {rec.address or ''}  {release_label(s)}  "
+              f"{s.get('package_count', 0)} packages  "
               f"scanned {rec.scanned_at}")
     lines = [header]
     lines += [f"  ! {w}" for w in rec.warnings]

@@ -130,6 +130,12 @@ class Runner:
         self.cache.close()
         self.state.close()
 
+    def covering_sources(self, inv: HostInventory) -> list[str]:
+        """Core sources with vulnerability data for the host's release. Live
+        sources (OSV) do not count offline."""
+        return [s.name for s in self.sources
+                if s.name in CORE_SOURCES and not (self.offline and s.live) and s.covers(inv)]
+
     def refresh(self, force: bool = False) -> list[SourceStatus]:
         statuses = [s.refresh(force) for s in self.sources]
         if self.kev is not None:
@@ -218,6 +224,11 @@ class Runner:
                 log.error("source unavailable", extra={"source": s.name, "error": s.message})
 
         collected = self.collect(hosts, enforce_pins)
+        for name, result in collected.items():
+            if isinstance(result, HostInventory) and not self.covering_sources(result):
+                # without data the host would show 0 findings and look clean
+                collected[name] = inventory.InventoryError(
+                    f"no vulnerability source covers {result.release_label()}")
         inventories = [v for v in collected.values() if isinstance(v, HostInventory)]
         run.inventories = {inv.host: inv for inv in inventories}
 

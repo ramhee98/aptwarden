@@ -107,6 +107,22 @@ def debian_host_commands(dpkg_output: str | None = None,
     }
 
 
+NOBLE_SUITES = ("noble", "noble-updates", "noble-security")
+
+
+def ubuntu_host_commands(release: str = "noble", suites=NOBLE_SUITES) -> dict:
+    """A Ubuntu host: Release files carry the bare codename for every pocket,
+    the suite is only in the sources entry."""
+    from aptwarden.inventory import APT_TARGETS_FORMAT
+
+    cmds = debian_host_commands(os_release=fixture_text(f"os-release-{release}.txt"))
+    cmds[("cat", "/etc/debian_version")] = (0, "trixie/sid\n", "")
+    cmds[("apt-get", "indextargets", f"--format={APT_TARGETS_FORMAT}")] = (
+        0, "".join(f"deb|{ident}|{release}|{s}\n" for s in suites
+                   for ident in ("Packages", "Translations")), "")
+    return cmds
+
+
 class FakeFactory:
     def __init__(self, transports: dict[str, Transport | Exception]):
         self.transports = transports
@@ -162,4 +178,4 @@ def make_config(tmp_path):
 
 
 __all__ = ["FakeHttp", "FakeTransport", "FakeFactory", "HttpError", "Response", "fixture_json",
-           "fixture_text", "json_response", "debian_host_commands"]
+           "fixture_text", "json_response", "debian_host_commands", "ubuntu_host_commands"]

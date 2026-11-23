@@ -24,7 +24,7 @@ from pathlib import Path
 from aptwarden import __version__
 from aptwarden.config import Config, HostConfig
 from aptwarden.definitions import Definition
-from aptwarden.models import Finding, FindingStatus, Severity
+from aptwarden.models import Finding, FindingStatus, Severity, release_label
 from aptwarden.patch import planner, window
 from aptwarden.patch.runner import policy_skip_reason
 from aptwarden.report import group_findings, truncate, version_change
@@ -450,8 +450,8 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
     # inside a closed <details> opens it (Chrome 97, Firefox 148, Safari 26.2 and later),
     # one on <details> itself does not. scroll-margin keeps the summary line in view.
     parts = [f'<details class="host"><summary>{_e(rec.host)} '
-             f'<span class="muted">· {_e(rec.address or "")} · Debian '
-             f'{_e(s.get("debian_version", "?"))} ({_e(s.get("codename", "?"))}) · '
+             f'<span class="muted">· {_e(rec.address or "")} · '
+             f'{_e(release_label(s))} · '
              f'{len(fixable)} fixable</span></summary>'
              f'<span class="anchor" id="{_e(rec.host)}"></span>']
     if latest_error:

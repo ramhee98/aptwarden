@@ -10,7 +10,7 @@ import sys
 from aptwarden import __version__, config, report
 from aptwarden import log as aplog
 from aptwarden.models import HostInventory, Severity
-from aptwarden.sources import SourceStatus
+from aptwarden.sources import CORE_SOURCES, SourceStatus
 
 EXIT_OK, EXIT_PROBLEM, EXIT_USAGE = 0, 1, 2
 
@@ -311,6 +311,9 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
         tracker = next((s for s in runner.sources if s.name == "debian_tracker"), None)
         releases = tracker.releases() if tracker else set()
         results = runner.collect(hosts)
+        # what a report run could use; OSV counts although this check is offline
+        covered = {name: any(s.covers(r) for s in runner.sources if s.name in CORE_SOURCES)
+                   for name, r in results.items() if isinstance(r, HostInventory)}
     finally:
         runner.close()
     rows = [["HOST", "ADDRESS", "RESULT", "RELEASE", "PACKAGES", "NOTES"]]
@@ -322,10 +325,13 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
             rows.append([h.name, h.address, "FAIL", "-", "-", str(r)])
             continue
         notes = []
-        if releases and r.codename not in releases:
-            notes.append("release not in tracker cache")
-        if not releases:
-            notes.append("tracker cache empty, run 'aptwarden sources refresh'")
+        if r.distro == "debian" and tracker is not None:
+            if releases and r.codename not in releases:
+                notes.append("release not in tracker cache")
+            if not releases:
+                notes.append("tracker cache empty, run 'aptwarden sources refresh'")
+        if not covered[h.name]:
+            notes.append("no vulnerability source covers this release")
         for key in ("needrestart_installed", "reboot_required"):
             if r.facts.get(key) == "yes":
                 notes.append(key.replace("_", " "))
@@ -334,13 +340,14 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
         suites = r.apt_suites()
         if suites is None:
             notes.append("apt sources unknown")
-        elif r.codename != "sid" and f"{r.codename}-security" not in suites:
+        elif (r.distro, r.codename) != ("debian", "sid") \
+                and f"{r.codename}-security" not in suites:
             notes.append(f"apt sources lack {r.codename}-security")
         if "patch" in h.policy["modes"] or "dry-run" in h.policy["modes"]:
             notes += _patch_readiness(h, runner_cfg=cfg)
         elif h.policy.get("enforce_block") == "pin":
             notes += _helper_readiness(h)
-        rows.append([h.name, h.address, "ok", f"{r.debian_version} ({r.codename})",
+        rows.append([h.name, h.address, "ok", r.release_label(),
                      str(len(r.packages)), ", ".join(notes)])
     print("\n".join(report.format_table(rows, indent="")))
     if args.accept_new:

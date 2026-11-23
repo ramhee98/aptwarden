@@ -41,6 +41,8 @@ class Source(ABC):
     name: str = ""
     # Lower wins when several sources report the same vulnerability.
     priority: int = 100
+    # Queried during match() instead of refreshed into the cache: no data offline.
+    live: bool = False
 
     def __init__(self, settings: dict, cache: Cache, http: HttpClient, offline: bool = False,
                  **context):
@@ -54,6 +56,11 @@ class Source(ABC):
     def refresh(self, force: bool = False) -> SourceStatus:
         """Update cached data if needed. Must not raise for network errors;
         report them in the returned status instead."""
+
+    def covers(self, inv: HostInventory) -> bool:
+        """Whether this source has general vulnerability data for the host's
+        distribution and release. Only core sources answer True."""
+        return False
 
     @abstractmethod
     def match(self, inventories: list[HostInventory]) -> dict[str, list[Finding]]:

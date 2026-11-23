@@ -46,6 +46,18 @@ class FindingStatus(StrEnum):
     NOT_AFFECTED = "not-affected"
 
 
+DISTROS = {"debian": "Debian", "ubuntu": "Ubuntu"}
+
+
+def release_label(summary: dict) -> str:
+    """``Debian 13.1 (trixie)`` or ``Ubuntu 24.04.3 LTS (noble)`` from a host
+    summary. Summaries stored before 0.10 have neither distro nor os_version."""
+    distro = summary.get("distro") or "debian"
+    version = summary.get("os_version") or summary.get("debian_version") or "?"
+    return (f"{DISTROS.get(distro, distro)} {version} "
+            f"({summary.get('codename') or '?'})")
+
+
 @dataclass(frozen=True)
 class Package:
     name: str  # binary package, with ":arch" qualifier for multi-arch: same packages
@@ -68,6 +80,8 @@ class HostInventory:
     facts: dict[str, str] = field(default_factory=dict)
     collected_at: str = ""
     notes: list[str] = field(default_factory=list)  # from this scan's actions, not stored
+    distro: str = "debian"  # one of DISTROS; Debian derivatives count as debian
+    os_version: str = ""  # for display: "13.1" (Debian), "24.04.3 LTS" (Ubuntu)
 
     def source_packages(self) -> dict[tuple[str, str], list[str]]:
         """Map (source package, source version) to the installed binaries built from it."""
@@ -77,16 +91,22 @@ class HostInventory:
         return dict(result)
 
     def apt_suites(self) -> set[str] | None:
-        """Suites of the host's Debian package sources (``trixie``,
-        ``trixie-security``, ...), or None if they could not be read."""
+        """Suites of the host's package sources (``trixie``, ``trixie-security``,
+        ``noble-security``, ...), or None if they could not be read."""
         value = self.facts.get("apt_suites")
         return None if value is None else set(value.split())
 
+    def release_label(self) -> str:
+        return release_label(self.summary())
+
     def summary(self) -> dict:
         return {
+            "distro": self.distro,
             "os_id": self.os_id,
             "os_version_id": self.os_version_id,
+            "os_version": self.os_version,
             "codename": self.codename,
+            # content of /etc/debian_version; on Ubuntu the Debian base, e.g. "trixie/sid"
             "debian_version": self.debian_version,
             "arch": self.arch,
             "package_count": len(self.packages),

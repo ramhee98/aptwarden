@@ -5,6 +5,25 @@ commits.
 
 ## Unreleased
 
+### Hosts and inventory
+
+- **A host no source has data for fails instead of looking clean.** Before, such a
+  host (an Ubuntu host, or a Debian release the tracker lacks while OSV is disabled)
+  got only a warning and 0 findings. Now it fails with
+  `no vulnerability source covers Ubuntu 24.04 LTS (noble)`, and `hosts check` notes
+  `no vulnerability source covers this release`. OSV does not count in `--offline` runs.
+- **Distribution detection.** The inventory records `distro` (`debian` or `ubuntu`)
+  and `os_version`. Debian derivatives (`ID_LIKE=debian`) count as Debian as before;
+  Ubuntu derivatives such as Linux Mint are refused, because Ubuntu's data does not
+  cover their own repositories. Preparation for Ubuntu support; Ubuntu hosts have no
+  vulnerability source yet.
+- **Release shown per distribution:** `Debian 13.1 (trixie)`, `Ubuntu 24.04 LTS
+  (noble)` in the report, the status page and `hosts check`. On Ubuntu,
+  `/etc/debian_version` names the Debian base (`trixie/sid`); it stays in the JSON
+  summary as `debian_version`.
+- **apt sources on Ubuntu:** Ubuntu's Release files name the bare codename for every
+  pocket, so the suites come from the sources entries there (`noble-security`).
+
 ### Helper package
 
 - **Releases on GitHub.** For every release tag, once all checks passed, CI creates a

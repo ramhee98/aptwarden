@@ -6,6 +6,7 @@ from aptwarden import cli
 from aptwarden.models import FindingStatus
 from aptwarden.runner import Runner
 from aptwarden.sources import debian_tracker
+from aptwarden.sources.osv import OsvSource
 from aptwarden.transport import TransportError
 from tests.conftest import (
     FakeFactory,
@@ -15,6 +16,7 @@ from tests.conftest import (
     debian_host_commands,
     fixture_json,
     json_response,
+    ubuntu_host_commands,
 )
 
 TRACKER = "https://security-tracker.debian.org/tracker/data/json"
@@ -110,6 +112,33 @@ def test_report_without_any_data_fails(setup):
     run = runner.report(cfg.select_hosts(["web01"]))
     assert run.status == "failed"
     assert not run.data_available
+    runner.close()
+
+
+def test_report_fails_hosts_no_source_covers(setup):
+    # Without data a host would show 0 findings and look clean.
+    cfg, http, factory = setup
+    factory.transports["db01"] = FakeTransport("db01", ubuntu_host_commands())
+    runner = Runner(cfg, http=http, transports=factory)
+    run = runner.report(cfg.hosts)
+    web, db = run.hosts
+    assert web.ok and web.findings
+    assert not db.ok
+    assert db.error == "no vulnerability source covers Ubuntu 24.04 LTS (noble)"
+    assert run.status == "partial"
+    runner.close()
+
+
+def test_osv_covers_ubuntu_only_online(setup):
+    # OSV has no Ubuntu ecosystem mapping yet; Debian hosts it covers, but not offline
+    cfg, http, factory = setup
+    runner = Runner(cfg, http=http, transports=factory)
+    osv = OsvSource({"url": OSV}, runner.cache, http)
+    runner.sources.append(osv)
+    debian = runner.collect([cfg.hosts[0]])["web01"]
+    assert runner.covering_sources(debian) == ["osv"]  # tracker cache still empty
+    runner.offline = True
+    assert runner.covering_sources(debian) == []
     runner.close()
 
 
@@ -270,6 +299,21 @@ def test_hosts_check_accept_new_only_for_unknown_hosts(setup, tmp_path, monkeypa
     assert seen == {"web01": "accept-new", "db01": "yes"}  # known host stays strict
     assert "web01: new host key recorded: SHA256:new (ED25519)" in out
     assert "db01" not in out.split("new host key")[0].splitlines()[-1]
+
+
+def test_hosts_check_ubuntu(setup, tmp_path, monkeypatch, capsys):
+    cfg, http, factory = setup
+    factory.transports["db01"] = FakeTransport("db01", ubuntu_host_commands())
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(json.dumps(cfg.raw))
+    monkeypatch.setattr("aptwarden.runner.TransportFactory", lambda: factory)
+    cli.main(["-c", str(config_file), "-q", "hosts", "check"])
+    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()}
+    assert "Ubuntu 24.04 LTS (noble)" in rows["db01"]
+    assert "no vulnerability source covers this release" in rows["db01"]
+    # no Debian tracker notes, and noble-security is found in the sources entries
+    assert "tracker" not in rows["db01"] and "lack" not in rows["db01"]
+    assert "Debian 13.1 (trixie)" in rows["web01"]
 
 
 def test_ownership_guard(tmp_path, monkeypatch, capsys):

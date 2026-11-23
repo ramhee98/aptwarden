@@ -96,6 +96,7 @@ def _urgency(record: dict, eco: str, package: str) -> str | None:
 class OsvSource(Source):
     name = "osv"
     priority = 50
+    live = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -106,6 +107,9 @@ class OsvSource(Source):
     @property
     def url(self) -> str:
         return self.settings["url"].rstrip("/")
+
+    def covers(self, inv: HostInventory) -> bool:
+        return ecosystem(inv) is not None
 
     def refresh(self, force: bool = False) -> SourceStatus:
         # OSV is queried live during match(), there is nothing to prefetch.

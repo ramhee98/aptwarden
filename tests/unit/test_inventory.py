@@ -4,13 +4,19 @@ from aptwarden.inventory import (
     APT_TARGETS_FORMAT,
     InventoryError,
     collect,
+    detect_distro,
     parse_apt_suites,
     parse_dpkg_query,
     parse_facts,
     parse_os_release,
 )
 from aptwarden.transport import TransportError
-from tests.conftest import FakeTransport, debian_host_commands, fixture_text
+from tests.conftest import (
+    FakeTransport,
+    debian_host_commands,
+    fixture_text,
+    ubuntu_host_commands,
+)
 
 
 def test_parse_real_dpkg_output():
@@ -89,6 +95,8 @@ def test_collect():
     assert inv.host == "web01"
     assert (inv.os_id, inv.os_version_id, inv.codename) == ("debian", "13", "trixie")
     assert inv.debian_version == "13.1"
+    assert (inv.distro, inv.os_version) == ("debian", "13.1")
+    assert inv.release_label() == "Debian 13.1 (trixie)"
     assert len(inv.packages) == 249
     assert inv.facts["virt"] == "lxc"
     assert inv.facts["needrestart_installed"] == "no"
@@ -145,3 +153,48 @@ def test_collect_without_apt_suites():
     inv = collect(FakeTransport("web01", cmds))  # e.g. apt too old for indextargets
     assert "apt_suites" not in inv.facts
     assert inv.apt_suites() is None
+
+
+@pytest.mark.parametrize("release, version, suites", [
+    ("noble", "24.04 LTS", {"noble", "noble-updates", "noble-security"}),
+    # 26.04 has no "LTS" in VERSION, only in PRETTY_NAME
+    ("resolute", "26.04 LTS", {"resolute", "resolute-updates", "resolute-security"}),
+])
+def test_collect_ubuntu(release, version, suites):
+    inv = collect(FakeTransport("u1", ubuntu_host_commands(release, sorted(suites))))
+    assert (inv.distro, inv.os_id, inv.codename) == ("ubuntu", "ubuntu", release)
+    assert inv.os_version == version
+    assert inv.debian_version == "trixie/sid"  # the Debian base, not shown
+    assert inv.release_label() == f"Ubuntu {version} ({release})"
+    assert inv.apt_suites() == suites
+    assert inv.summary()["distro"] == "ubuntu"
+
+
+def test_parse_apt_suites_ubuntu():
+    # Ubuntu's Release files say "Codename: noble" for every pocket; with the Debian
+    # rule all pockets would collapse into "noble" and -security would look missing
+    text = ("deb|Packages|noble|noble-security\n"
+            "deb|Packages|noble|noble-updates\n"
+            "deb|Packages|noble|noble\n"
+            "deb|Packages||noble-apps-security\n"   # Ubuntu Pro, before apt update
+            "deb|Packages|noble|bad\x1b[2J\n")
+    assert parse_apt_suites(text, "ubuntu") == [
+        "noble", "noble-apps-security", "noble-security", "noble-updates"]
+    assert parse_apt_suites(text) == ["noble", "noble-apps-security"]
+
+
+@pytest.mark.parametrize("os_release, expected", [
+    ({"ID": "debian"}, "debian"),
+    ({"ID": "ubuntu", "ID_LIKE": "debian"}, "ubuntu"),
+    ({"ID": "raspbian", "ID_LIKE": "debian"}, "debian"),
+    ({"ID": "linuxmint", "ID_LIKE": "ubuntu debian"}, "unsupported distribution"),
+    ({"ID": "pop", "ID_LIKE": "ubuntu debian"}, "unsupported distribution"),
+    ({"ID": "fedora"}, "not a Debian based system"),
+    ({"ID": "foo", "ID_LIKE": "notdebian"}, "not a Debian based system"),
+])
+def test_detect_distro(os_release, expected):
+    if expected in ("debian", "ubuntu"):
+        assert detect_distro(os_release) == expected
+    else:
+        with pytest.raises(InventoryError, match=expected):
+            detect_distro(os_release)

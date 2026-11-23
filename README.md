@@ -87,7 +87,8 @@ sources; an alias like `stable-security` there is not resolved to the codename.
   `security-tracker.debian.org`, `api.osv.dev`, `services.nvd.nist.gov`, `www.cisa.gov`
   and `github.com` (custom definitions, installation, updates). It also needs SSH to
   every target and, for patching, the Proxmox API (port 8006).
-- **Target hosts:** Debian (or Debian based with `VERSION_CODENAME`) reachable over SSH.
+- **Target hosts:** Debian (or a Debian derivative with `VERSION_CODENAME`) reachable over
+  SSH. Ubuntu support is in progress; Ubuntu hosts and their derivatives fail for now.
   HTTP and TCP healthchecks run from the central host unless `on_host` is set, see
   [Healthchecks](#healthchecks-from-the-central-host-or-on-the-host).
 
