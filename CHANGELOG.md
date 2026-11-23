@@ -5,6 +5,24 @@ commits.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **Reinstall the helper on every patch host** and on hosts that use
+  `enforce_block: pin` (`aptwarden helper show --install`, see the README, "Target
+  hosts: helper and sudo"). The helper is now version 4; until it is updated, patch runs
+  abort on that host with `outdated helper` and change nothing.
+
+### Definitions
+
+- **`policy.enforce_block: pin` keeps blocked versions off the host.** Each report run
+  pins the available versions that a `block` definition marks as known-bad to priority
+  -1 in `/etc/apt/preferences.d/aptwarden-block`, so a manual `apt upgrade` or
+  unattended-upgrades cannot install them either. The helper's new `pin` command
+  writes the file; the scan calls it only when the pins change and removes them when
+  the definition ends or the host goes back to `alert` (the default). The host shows
+  `blocked versions pinned away: …` while pins are active, and a warning if they could
+  not be written. `hosts check` checks the helper on hosts that only pin.
+
 ### Reporting
 
 - **Fixes a host cannot install are flagged.** A scan now reads the host's package

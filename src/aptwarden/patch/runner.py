@@ -33,7 +33,7 @@ from aptwarden.transport import Transport, TransportError
 
 log = logging.getLogger(__name__)
 
-HELPER_VERSION = "3"
+HELPER_VERSION = "4"
 # The helper's exit status when it refuses a call. It only exits so before running apt, so
 # nothing on the host changed.
 HELPER_REFUSED = 2

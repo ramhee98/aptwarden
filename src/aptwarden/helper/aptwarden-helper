@@ -5,13 +5,15 @@
 # and allow it, and nothing else, in /etc/sudoers.d/aptwarden. A sudoers rule
 # on apt-get itself would be root for anyone who can pass options
 # (-o APT::Update::Pre-Invoke::=/bin/sh). This script only accepts fixed
-# subcommands and strictly validated "package=version" arguments. install
+# subcommands and strictly validated "package=version" arguments. pin writes
+# only its own apt preferences file, with priority -1 for exactly the named
+# versions, so it can keep versions from being installed but never force one. install
 # first simulates the transaction itself and refuses it if apt would install
 # anything that was not named with exactly that version, or remove anything.
 set -eu
 set -f  # no globbing of arguments
 
-HELPER_VERSION=3
+HELPER_VERSION=4
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # Test hook for aptwarden's own test suite. Never honoured as root, so it has
@@ -170,11 +172,33 @@ EOF
             *) die "usage: needrestart list|restart" ;;
         esac
         ;;
+    pin)
+        # Keep exactly these versions from being installed (enforce_block: pin).
+        # Replaces the whole file; no arguments remove it.
+        pin_file=/etc/apt/preferences.d/aptwarden-block
+        if [ "$#" -eq 0 ]; then
+            rm -f -- "$pin_file"
+            echo "aptwarden-helper: no pins, $pin_file removed"
+            exit 0
+        fi
+        check_packages "$@"
+        # outside preferences.d, so apt never reads a half written file
+        tmp=$(mktemp /etc/apt/.aptwarden-block.XXXXXX)
+        trap 'rm -f -- "$tmp"' EXIT
+        for arg in "$@"; do
+            pkg=${arg%%=*}
+            printf 'Explanation: aptwarden enforce_block: pin; replaced by the next scan\n'
+            printf 'Package: %s\nPin: version %s\nPin-Priority: -1\n\n' "${pkg%%:*}" "${arg#*=}"
+        done >"$tmp"
+        chmod 0644 "$tmp"
+        mv -f -- "$tmp" "$pin_file"
+        echo "aptwarden-helper: $# versions pinned in $pin_file"
+        ;;
     reboot)
         [ "$#" -eq 0 ] || die "reboot takes no arguments"
         exec systemctl reboot
         ;;
     *)
-        die "unknown command: ${cmd:-<none>} (version|update|simulate|install|needrestart|reboot)"
+        die "unknown command: ${cmd:-<none>} (version|update|simulate|install|needrestart|pin|reboot)"
         ;;
 esac

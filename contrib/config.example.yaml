@@ -111,6 +111,8 @@ policy:                            # defaults for every host, overridable per ho
   allow_without_snapshot: false
   allow_extra_upgrades: false      # dependency upgrades outside the plan
   allow_new_packages: []           # packages that may be newly installed
+  enforce_block: alert             # alert | pin: also keep versions blocked by a
+                                   # definition from being installed (needs the helper)
 
 health:                            # timing of the post-patch healthchecks
   grace: 10s

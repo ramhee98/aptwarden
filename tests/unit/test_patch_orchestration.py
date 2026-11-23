@@ -75,7 +75,7 @@ def patch_setup(cfg, monkeypatch):
                     patch_runner=PatchRunner(None, [], sleep=lambda s: None))
     runner._patch_runner.state = runner.state
 
-    def fake_report(run, hosts, force):
+    def fake_report(run, hosts, force, enforce_pins=True):
         run.sources = [SourceStatus("debian_tracker")]
         for host in hosts:
             run.hosts.append(HostRecord(run.run_id, host.name, "192.0.2.10", True, None, {},
@@ -467,7 +467,7 @@ def test_runner_override_is_per_run(make_config, monkeypatch):
     runner = Runner(cfg, transports=Factory(), providers=lambda host: FakeProvider(h),
                     patch_runner=Capture(None, []))
 
-    def fake_report(run, hosts, force):
+    def fake_report(run, hosts, force, enforce_pins=True):
         run.sources = [SourceStatus("debian_tracker")]
         for host in hosts:
             run.hosts.append(HostRecord(run.run_id, host.name, "x", True, None, {}, [], "now", []))
@@ -515,7 +515,7 @@ def dependency_runner(cfg, monkeypatch, statuses):
     runner = Runner(cfg, transports=Factory(), providers=lambda host: FakeProvider(h),
                     patch_runner=Capture(None, []))
 
-    def fake_report(run, hosts, force):
+    def fake_report(run, hosts, force, enforce_pins=True):
         run.sources = [SourceStatus("debian_tracker")]
         for host in hosts:
             run.hosts.append(HostRecord(run.run_id, host.name, "x", True, None, {}, [], "now", []))

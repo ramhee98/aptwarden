@@ -201,9 +201,34 @@ def cmd_status(args, cfg: config.Config) -> int:
     return EXIT_OK
 
 
+def _helper_note(t, h: config.HostConfig) -> str:
+    from aptwarden.patch.runner import explain_helper_failure
+
+    r = t.run(["sudo", "-n", h.ssh.helper, "version"], timeout=30)
+    problem = explain_helper_failure(r, h.ssh.helper)
+    return "helper NOT ready: " + problem.rsplit("; see README", 1)[0] if problem \
+        else "helper ok"
+
+
+def _helper_readiness(h: config.HostConfig) -> list[str]:
+    """For hosts that only need the helper to pin blocked versions."""
+    from aptwarden.transport import TransportError, TransportFactory
+
+    factory = TransportFactory()
+    try:
+        t = factory.create(h)
+        try:
+            return [_helper_note(t, h)]
+        except TransportError as e:
+            return [f"helper check failed: {e}"]
+        finally:
+            t.close()
+    finally:
+        factory.cleanup()
+
+
 def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[str]:
     """Problems that would stop patching this host."""
-    from aptwarden.patch.runner import explain_helper_failure
     from aptwarden.runner import Runner
     from aptwarden.snapshot import SnapshotError
     from aptwarden.transport import TransportError, TransportFactory
@@ -213,12 +238,7 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
     try:
         t = factory.create(h)
         try:
-            r = t.run(["sudo", "-n", h.ssh.helper, "version"], timeout=30)
-            problem = explain_helper_failure(r, h.ssh.helper)
-            if problem:
-                notes.append("helper NOT ready: " + problem.rsplit("; see README", 1)[0])
-            else:
-                notes.append("helper ok")
+            notes.append(_helper_note(t, h))
             if any("http" in c and c.get("on_host") for c in h.healthchecks) and \
                     t.run(["sh", "-c", "command -v curl"], timeout=15).returncode != 0:
                 notes.append("curl NOT installed (needed by on_host http checks)")
@@ -305,6 +325,8 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
             notes.append(f"apt sources lack {r.codename}-security")
         if "patch" in h.policy["modes"] or "dry-run" in h.policy["modes"]:
             notes += _patch_readiness(h, runner_cfg=cfg)
+        elif h.policy.get("enforce_block") == "pin":
+            notes += _helper_readiness(h)
         rows.append([h.name, h.address, "ok", f"{r.debian_version} ({r.codename})",
                      str(len(r.packages)), ", ".join(notes)])
     print("\n".join(report.format_table(rows, indent="")))

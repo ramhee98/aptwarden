@@ -654,6 +654,13 @@
             "manual"
           ]
         },
+        "enforce_block": {
+          "description": "alert: blocked versions only raise an alert; pin: also pin them away on the host (needs the helper)",
+          "enum": [
+            "alert",
+            "pin"
+          ]
+        },
         "allow_without_snapshot": {
           "type": "boolean"
         },

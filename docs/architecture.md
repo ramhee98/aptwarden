@@ -285,7 +285,10 @@ vulnerability (false-positive overrides).
 
 - installed blocked versions always raise an alert, whatever their severity,
 - the patch pipeline never installs them,
-- pinning them away per host (`enforce_block: pin`) is planned.
+- with `policy.enforce_block: pin`, each report run pins the available blocked
+  versions of installed packages to priority -1 in
+  `/etc/apt/preferences.d/aptwarden-block`, written by the helper, so manual `apt` runs
+  and unattended-upgrades skip them too.
 
 ## Storage
 

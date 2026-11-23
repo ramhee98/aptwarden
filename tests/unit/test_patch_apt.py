@@ -445,3 +445,55 @@ def test_preview_holds_back_fixes_from_missing_sources():
         ("openssl", "fixed version 2 is only in trixie-security, which the host's apt "
                     "sources lack"),
         ("tar", None)]
+
+
+def run_pin_helper(tmp_path, *args):
+    """The real helper's pin command, writing below tmp_path instead of /etc/apt."""
+    import subprocess
+    from importlib import resources
+
+    text = resources.files("aptwarden").joinpath("helper/aptwarden-helper").read_text()
+    for path in ("/etc/apt/preferences.d/aptwarden-block", "/etc/apt/.aptwarden-block"):
+        assert path in text
+        text = text.replace(path, str(tmp_path / "apt") + path.removeprefix("/etc/apt"))
+    (tmp_path / "apt" / "preferences.d").mkdir(parents=True, exist_ok=True)
+    helper = tmp_path / "aptwarden-helper"
+    helper.write_text(text)
+    return subprocess.run(["sh", str(helper), "pin", *args], capture_output=True, text=True)
+
+
+def test_helper_pin_writes_and_removes_its_file(tmp_path):
+    import stat
+
+    from aptwarden.pins import parse_pin_file
+
+    pin_file = tmp_path / "apt" / "preferences.d" / "aptwarden-block"
+    r = run_pin_helper(tmp_path, "xz-utils=5.8.1-2", "liblzma5:amd64=1:5.8.1-3+b1")
+    assert r.returncode == 0, r.stderr
+    text = pin_file.read_text()
+    assert "Package: liblzma5\nPin: version 1:5.8.1-3+b1\nPin-Priority: -1\n" in text
+    assert parse_pin_file(text) == {("xz-utils", "5.8.1-2"), ("liblzma5", "1:5.8.1-3+b1")}
+    assert stat.S_IMODE(pin_file.stat().st_mode) == 0o644
+    assert sorted(p.name for p in (tmp_path / "apt").iterdir()) == ["preferences.d"]
+
+    r = run_pin_helper(tmp_path, "xz-utils=5.8.1-2")  # replaces the whole file
+    assert parse_pin_file(pin_file.read_text()) == {("xz-utils", "5.8.1-2")}
+
+    r = run_pin_helper(tmp_path)
+    assert r.returncode == 0 and not pin_file.exists()
+
+
+@pytest.mark.parametrize("arg", [
+    "xz-utils=5.8.*",                    # a glob would pin more than named
+    "xz-utils=/5\\.8/",                  # a regex, too
+    "xz-utils=5.8.1-2\nPin-Priority: 1001",  # a line of its own
+    "xz-utils",                          # no version
+    "Xz=5.8",
+])
+def test_helper_pin_refuses_invalid_arguments(tmp_path, arg):
+    pin_file = tmp_path / "apt" / "preferences.d" / "aptwarden-block"
+    run_pin_helper(tmp_path, "xz-utils=5.8.1-2")
+    before = pin_file.read_text()
+    r = run_pin_helper(tmp_path, "tar=1.35-1", arg)
+    assert r.returncode == 2 and "aptwarden-helper:" in r.stderr
+    assert pin_file.read_text() == before

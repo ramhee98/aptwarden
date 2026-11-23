@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
-from aptwarden import inventory, statuspage
+from aptwarden import inventory, pins, statuspage
 from aptwarden import log as aplog
 from aptwarden.cache import Cache
 from aptwarden.config import Config, HostConfig, parse_duration
@@ -86,7 +86,7 @@ class RunReport:
 
 
 def host_notes(inv: HostInventory, findings: list[Finding] | None = None) -> list[str]:
-    notes = []
+    notes = list(inv.notes)
     missing: dict[str, list[Finding]] = {}
     for f in findings or []:
         if f.missing_source:
@@ -136,13 +136,20 @@ class Runner:
             statuses.append(self.kev.refresh(force))
         return statuses
 
-    def collect(self, hosts: list[HostConfig]) -> dict[str, HostInventory | Exception]:
+    def collect(self, hosts: list[HostConfig], enforce_pins: bool = False
+                ) -> dict[str, HostInventory | Exception]:
+        """Inventory the hosts. ``enforce_pins`` also brings each host's pins for
+        blocked versions in line (policy.enforce_block); reports do, checks don't."""
         factory = self._transports or TransportFactory()
+        definitions = self.definitions() if enforce_pins else []
 
         def one(h: HostConfig):
             transport = factory.create(h)
             try:
-                return inventory.collect(transport)
+                inv = inventory.collect(transport)
+                if enforce_pins:
+                    inv.notes += pins.enforce(transport, h, inv, definitions).notes()
+                return inv
             except Exception as e:  # noqa: BLE001 - one broken host must not stop the run
                 if not isinstance(e, inventory.InventoryError):
                     log.exception("inventory crashed", extra={"host": h.name})
@@ -202,14 +209,15 @@ class Runner:
             aplog.run_id_var.reset(token)
         return run
 
-    def _report(self, run: RunReport, hosts: list[HostConfig], force_refresh: bool) -> None:
+    def _report(self, run: RunReport, hosts: list[HostConfig], force_refresh: bool,
+                enforce_pins: bool = True) -> None:
         log.info("run started", extra={"command": run.command, "hosts": len(hosts)})
         run.sources = self.refresh(force_refresh)
         for s in run.sources:
             if not s.ok:
                 log.error("source unavailable", extra={"source": s.name, "error": s.message})
 
-        collected = self.collect(hosts)
+        collected = self.collect(hosts, enforce_pins)
         inventories = [v for v in collected.values() if isinstance(v, HostInventory)]
         run.inventories = {inv.host: inv for inv in inventories}
 
@@ -327,7 +335,7 @@ class Runner:
             return
         lock = None if dry_run else _PatchLock(self.cfg.state_dir / "patch.lock")
         try:
-            self._report(run, eligible, False)
+            self._report(run, eligible, False, enforce_pins=not dry_run)
             runner = self._patch_runner or PatchRunner(self.state, self.definitions())
             factory = self._transports or TransportFactory()
             ordered = order_by_dependencies(eligible)

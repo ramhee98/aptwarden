@@ -281,9 +281,46 @@ aptwarden defs validate DIR  # check a definitions directory, no config needed (
 
 - **Precedence:** a definition wins over the Debian tracker and OSV for the CVEs it
   lists, including "not affected".
-- **`block`:** an installed blocked version always raises an alert.
+- **`block`:** an installed blocked version always raises an alert, and patch runs never
+  install a blocked version. With `policy.enforce_block: pin` blocked versions are also
+  pinned away on the host, see below.
 - **Rejected releases:** a rejected tag (unsigned, foreign key, rollback, invalid
   content) raises one alert, and the previous release stays active.
+
+#### Pinning blocked versions away (`enforce_block: pin`)
+
+By default (`enforce_block: alert`) a `block` definition only stops aptwarden itself.
+A manual `apt upgrade` or unattended-upgrades could still install the known-bad
+version. With `pin`, each report run also keeps it off the host:
+
+```yaml
+policy:
+  enforce_block: pin    # alert (default) | pin
+```
+
+- **What is pinned:** for every installed source package with an active `block`
+  definition, the scan asks the host's apt (`apt-cache show`, no root) for all available
+  versions of its installed binaries. Each version built from a blocked source version
+  gets `Pin-Priority: -1` in `/etc/apt/preferences.d/aptwarden-block`, so apt never
+  installs it. Only exact versions are pinned, no patterns.
+- **The installed version is never pinned.** If it is blocked, the alert says so;
+  upgrade to a good version.
+- **The helper writes the file** (`aptwarden-helper pin pkg=version ...`, see
+  [Target hosts: helper and sudo](#target-hosts-helper-and-sudo)). It accepts only
+  validated `package=version` pairs and writes nothing but priority -1, so it can keep a
+  version out but never force one in.
+- **sudo only on changes:** the scan reads the file itself and calls the helper only
+  when the pins change. Hosts without installed blocked packages never need it.
+- **Pins follow the definitions:** when a definition expires or is withdrawn, or the
+  host goes back to `alert`, the next report removes the pins again.
+- **Visible in the report:** the host shows `blocked versions pinned away: xz-utils
+  5.6.1-1 (AW-2024-0001)` while pins are active, and `enforce_block: pin failed, …`
+  as a warning if they could not be written (e.g. outdated helper).
+- **Dry runs and `hosts check` change nothing.** For a pin host that does not patch,
+  `hosts check` still checks the helper.
+
+A version published after the last scan is not pinned until the next report run. Run
+the report timer often enough for the hosts you pin.
 
 ### NVD API key
 
@@ -393,8 +430,9 @@ database writes. The window is minutes, but for mail and database hosts consider
 ### Target hosts: helper and sudo
 
 A sudoers rule on `apt-get` itself would be root for anyone who can pass options. Target
-hosts therefore get a small root-owned helper. It has fixed subcommands and validates every
-`package=version`. Before it installs, it simulates the transaction itself and refuses it
+hosts therefore get a small root-owned helper. Patching needs it, and so does
+[`enforce_block: pin`](#pinning-blocked-versions-away-enforce_block-pin). It has fixed
+subcommands and validates every `package=version`. Before it installs, it simulates the transaction itself and refuses it
 if apt would install anything not named with exactly that version, or remove anything.
 sudo allows this one script and nothing else:
 
@@ -932,8 +970,8 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 - **Docker images are not scanned yet** (planned as a Trivy plugin).
 - **PVE nodes are report-only by design:** Proxmox requires `apt full-upgrade`, and
   a node cannot snapshot itself.
-- **`enforce_block: pin` is not implemented yet:** blocked versions are never installed
-  by aptwarden, but manual `apt` runs are not prevented.
+- **`enforce_block: pin` pins only what apt already lists:** a blocked version
+  published after the last scan can be installed until the next report run pins it.
 - **`depends_on` only orders hosts within one patch run,** it does not link runs or
   windows, see [Dependencies between hosts](#dependencies-between-hosts-depends_on).
 

@@ -5,7 +5,7 @@ import pytest
 from aptwarden import config
 from aptwarden.definitions import parse as parse_definition
 from aptwarden.models import Finding, FindingStatus, HostInventory, Package, Severity
-from aptwarden.patch.runner import PatchRunner
+from aptwarden.patch.runner import HELPER_VERSION, PatchRunner
 from aptwarden.snapshot import NoSnapshots, SnapshotError, SnapshotProvider, SnapshotRef
 from aptwarden.state import State
 from aptwarden.transport import CommandResult, Transport
@@ -55,7 +55,7 @@ class ScriptedTransport(Transport):
             if not h.helper_ok:
                 return ok(rc=1, err="sudo: a password is required")
             if cmd == "version":
-                return ok("aptwarden-helper 3\n")
+                return ok(f"aptwarden-helper {HELPER_VERSION}\n")
             if cmd == "update":
                 return ok()
             if cmd == "simulate":
@@ -526,8 +526,8 @@ def test_manual_rollback(state):
 
 # real messages captured from a Debian 13 host
 @pytest.mark.parametrize("stdout, stderr, expected", [
-    ("aptwarden-helper 3\n", "", None),
-    ("aptwarden-helper 2\n", "", "outdated helper (aptwarden-helper 2, expected version 3)"),
+    (f"aptwarden-helper {HELPER_VERSION}\n", "", None),
+    ("aptwarden-helper 2\n", "", f"outdated helper (aptwarden-helper 2, expected version {HELPER_VERSION})"),
     ("", "env: ‘sudo’: No such file or directory", "sudo is not installed"),
     ("", "sudo: a password is required", "no sudo rule for the helper"),
     ("", f"sudo: {HELPER}: command not found", "the helper is not installed at"),

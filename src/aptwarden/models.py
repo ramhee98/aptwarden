@@ -67,6 +67,7 @@ class HostInventory:
     packages: list[Package]
     facts: dict[str, str] = field(default_factory=dict)
     collected_at: str = ""
+    notes: list[str] = field(default_factory=list)  # from this scan's actions, not stored
 
     def source_packages(self) -> dict[tuple[str, str], list[str]]:
         """Map (source package, source version) to the installed binaries built from it."""

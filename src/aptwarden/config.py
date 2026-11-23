@@ -48,6 +48,7 @@ DEFAULTS: dict = {
         "allow_without_snapshot": False,
         "allow_extra_upgrades": False,
         "allow_new_packages": [],
+        "enforce_block": "alert",
     },
     "health": {"grace": "10s", "retries": 6, "interval": "5s", "connect_to": None,
                "redirects": "same-host", "allowed_networks": []},
