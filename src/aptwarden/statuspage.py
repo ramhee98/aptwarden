@@ -306,7 +306,8 @@ def _next_patch(rec: HostRecord, host: HostConfig | None, definitions: list[Defi
         when = "open now"
     else:
         when = _local(window.next_start(p["window"], now, tz), tz)
-    items = planner.preview(rec.findings, p, definitions, rec.summary.get("codename", ""))
+    items = planner.preview(rec.findings, p, definitions, rec.summary.get("codename", ""),
+                            distro=rec.summary.get("distro") or "debian")
     active = {i.source_package for i in items if not i.skipped}
     if not items:
         summary = f"nothing ({policy_skip_reason(rec.findings, p)})"

@@ -66,7 +66,7 @@ def group(findings: list[Finding]) -> list[PlanItem]:
 
 
 def preview(findings: list[Finding], policy: dict, definitions: list[Definition],
-            release: str) -> list[PlanItem]:
+            release: str, *, distro: str) -> list[PlanItem]:
     """What a patch run would select from stored findings, without asking the
     host: no apt candidates, so an item is only marked skipped when its fixed
     version itself is blocked by a definition or lies in a repository the host's
@@ -81,7 +81,8 @@ def preview(findings: list[Finding], policy: dict, definitions: list[Definition]
             item.skipped = f"fixed version {item.fixed_version} is only in {repos}, " \
                            "which the host's apt sources lack"
             continue
-        block = blocked_by(definitions, item.source_package, release, item.fixed_version)
+        block = blocked_by(definitions, item.source_package, release, item.fixed_version,
+                           distro=distro)
         if block:
             item.skipped = f"fixed version {item.fixed_version} is blocked by {block.id}"
     return items
@@ -109,11 +110,11 @@ def parse_show(text: str) -> dict[tuple[str, str], tuple[str, str]]:
 
 
 def blocked_by(definitions: list[Definition], source: str, release: str,
-               version: str) -> Definition | None:
+               version: str, *, distro: str) -> Definition | None:
     for d in definitions:
         if d.action != "block" or d.package != source or d.expired():
             continue
-        verdict = d.evaluate(release, version)
+        verdict = d.evaluate(release, version, distro=distro)
         if verdict and verdict[0]:
             return d
     return None
@@ -121,7 +122,7 @@ def blocked_by(definitions: list[Definition], source: str, release: str,
 
 def resolve(item: PlanItem, candidates: dict[str, str | None],
             installed: dict[str, str], sources: dict[tuple[str, str], tuple[str, str]],
-            definitions: list[Definition], release: str) -> None:
+            definitions: list[Definition], release: str, *, distro: str) -> None:
     """Fill targets or mark the item as skipped. ``candidates`` and
     ``installed`` are keyed by the installed binary name."""
     targets = {}
@@ -155,7 +156,7 @@ def resolve(item: PlanItem, candidates: dict[str, str | None],
         item.skipped = (f"candidate {target} does not reach the fixed version "
                         f"{item.fixed_version} (security repository missing?)")
         return
-    block = blocked_by(definitions, item.source_package, release, target)
+    block = blocked_by(definitions, item.source_package, release, target, distro=distro)
     if block:
         item.skipped = f"candidate {target} is blocked by {block.id}"
         return

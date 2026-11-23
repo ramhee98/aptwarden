@@ -5,7 +5,7 @@ import pytest
 from aptwarden.definitions import Definition
 from aptwarden.models import Finding, FindingStatus, Severity
 from aptwarden.patch import apt, window
-from aptwarden.patch.planner import parse_show, preview
+from aptwarden.patch.planner import blocked_by, parse_show, preview
 
 SIM = """NOTE: This is only a simulation!
 Reading package lists...
@@ -425,13 +425,13 @@ def test_preview_filters_like_the_planner():
         Finding("CVE-7", "vim", "1", FindingStatus.NO_FIX, severity=Severity.CRITICAL),
     ]
     policy = {"auto_patch_severities": ["critical", "high"], "auto_patch_kev": True}
-    items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "trixie")
+    items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "trixie", distro="debian")
     assert [(i.source_package, i.skipped) for i in items] == [
         ("openssl", None), ("curl", "fixed version 8.1-2 is blocked by AW-2026-0009"),
         ("sudo", None)]
     assert items[0].vulns == ["CVE-1", "CVE-2"]
     # the block applies to its release only
-    items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "bookworm")
+    items = preview(findings, policy, [Definition.from_dict(BLOCK_CURL)], "bookworm", distro="debian")
     assert not any(i.skipped for i in items)
 
 
@@ -440,12 +440,23 @@ def test_preview_holds_back_fixes_from_missing_sources():
                         missing_source="trixie-security"),
                 fixable("CVE-2", "tar", Severity.CRITICAL)]
     policy = {"auto_patch_severities": ["critical"], "auto_patch_kev": False}
-    items = preview(findings, policy, [], "trixie")
+    items = preview(findings, policy, [], "trixie", distro="debian")
     assert [(i.source_package, i.skipped) for i in items] == [
         ("openssl", "fixed version 2 is only in trixie-security, which the host's apt "
                     "sources lack"),
         ("tar", None)]
 
+
+
+def test_blocks_for_any_release_skip_ubuntu():
+    block = Definition.from_dict({**BLOCK_CURL, "affected": [
+        {"release": "any", "ranges": [{"introduced": "8.1-2", "fixed": "8.1-3"}]}]})
+    assert blocked_by([block], "curl", "trixie", "8.1-2", distro="debian") is block
+    # Debian's version range says nothing about Ubuntu's versions
+    assert blocked_by([block], "curl", "noble", "8.1-2", distro="ubuntu") is None
+    named = Definition.from_dict({**BLOCK_CURL, "affected": [
+        {"release": "noble", "ranges": [{"introduced": "8.1-2ubuntu1", "fixed": "8.1-2ubuntu2"}]}]})
+    assert blocked_by([named], "curl", "noble", "8.1-2ubuntu1", distro="ubuntu") is named
 
 def run_pin_helper(tmp_path, *args):
     """The real helper's pin command, writing below tmp_path instead of /etc/apt."""

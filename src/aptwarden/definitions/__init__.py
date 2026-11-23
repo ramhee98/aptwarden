@@ -4,6 +4,12 @@ Schema: ``schemas/definition-v1.schema.json``. On top of the schema, the loader
 checks that versions parse with Debian semantics, ranges are ordered, ids are
 unique and match the file name, and that ``auto-patch`` has a fixed version
 to patch to.
+
+Releases are codenames, which Debian and Ubuntu never share. ``any`` means every
+Debian release: Ubuntu's versions differ per release (``1.2-3ubuntu0.24.04.1``), so
+a definition for Ubuntu names each release. This keeps existing definitions from
+applying Debian version ranges to Ubuntu hosts, and needs no new field that older
+aptwarden versions would reject.
 """
 
 from __future__ import annotations
@@ -20,7 +26,11 @@ import yaml
 
 from aptwarden import debversion
 
-KNOWN_RELEASES = frozenset({"buster", "bullseye", "bookworm", "trixie", "forky", "duke", "sid"})
+DEBIAN_RELEASES = frozenset({"buster", "bullseye", "bookworm", "trixie", "forky", "duke", "sid"})
+UBUNTU_RELEASES = frozenset({"focal", "jammy", "noble", "plucky", "questing", "resolute",
+                             "stonking"})
+# Only for a warning: a new release works before it is listed here.
+KNOWN_RELEASES = DEBIAN_RELEASES | UBUNTU_RELEASES
 
 
 @dataclass(frozen=True)
@@ -45,19 +55,21 @@ class Definition:
     expires: str | None = None
     path: str = ""
 
-    def ranges_for(self, release: str) -> list[Range] | None:
-        """Ranges for a release; None means the definition has no opinion."""
+    def ranges_for(self, release: str, distro: str) -> list[Range] | None:
+        """Ranges for a host's release; None means the definition has no opinion.
+        ``any`` covers Debian releases only (see the module docstring)."""
         if release in self.affected:
             return self.affected[release]
-        return self.affected.get("any")
+        return self.affected.get("any") if distro == "debian" else None
 
     def expired(self, today: date | None = None) -> bool:
         return bool(self.expires) and date.fromisoformat(self.expires) < (today or date.today())
 
-    def evaluate(self, release: str, version: str) -> tuple[bool, str | None] | None:
+    def evaluate(self, release: str, version: str, *,
+                 distro: str) -> tuple[bool, str | None] | None:
         """(affected, fixed version) for an installed source version, or None
-        if the definition does not cover the release."""
-        ranges = self.ranges_for(release)
+        if the definition does not cover the host's release."""
+        ranges = self.ranges_for(release, distro)
         if ranges is None:
             return None
         for r in ranges:

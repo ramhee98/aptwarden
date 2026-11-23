@@ -271,12 +271,19 @@ id: AW-2026-0002
 aliases: [CVE-2026-24061]
 summary: "inetutils telnetd: remote authentication bypass"
 severity: critical
-package: inetutils            # Debian source package
+package: inetutils            # source package
 affected:
-  - release: trixie           # or "any"
+  - release: trixie           # codename, or "any" (every Debian release)
     ranges: [{introduced: "0", fixed: "2:2.6-3+deb13u1"}]
 action: auto-patch            # report | auto-patch | block
 ```
+
+**Releases.** Debian and Ubuntu never share a codename, so a release names the
+distribution too. `any` means every Debian release: Ubuntu's versions differ per
+release (`1.2-3ubuntu0.24.04.1`), and existing definitions must not apply Debian
+version ranges to Ubuntu hosts. A definition for Ubuntu names each release. This
+needs no new field, which older aptwarden versions would reject (all or nothing);
+they only warn about an unknown release.
 
 **Precedence.** The `custom` source has the highest priority. For every
 vulnerability a definition lists, the definition decides status, fixed version

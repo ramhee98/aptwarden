@@ -95,7 +95,7 @@ def wanted(inv: HostInventory, blocks: dict[str, list[Definition]],
             continue
         for d in blocks.get(source, []):
             try:
-                verdict = d.evaluate(inv.codename, source_version)
+                verdict = d.evaluate(inv.codename, source_version, distro=inv.distro)
             except ValueError:
                 continue
             if verdict and verdict[0]:

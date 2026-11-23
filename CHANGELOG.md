@@ -38,6 +38,14 @@ commits.
 - **Links:** on Ubuntu hosts, CVEs link to `ubuntu.com/security/CVE-…` in alert mails
   and on the status page (where every host listing the CVE runs Ubuntu), USNs to
   `ubuntu.com/security/notices/`.
+- **Custom definitions on Ubuntu:** name the release (`release: noble`). `release:
+  any` keeps meaning every Debian release and no longer applies to Ubuntu hosts, whose
+  versions differ per release. No new field: older aptwarden versions accept such
+  definitions and only warn about an unknown release. Ubuntu codenames are known, so
+  `defs validate` does not warn about them. Blocks and pins follow the same rule.
+- **A Pro marker survives a definition:** when a definition decides a finding and
+  names the same fixed version as OSV, the finding keeps OSV's `needs …-security
+  (Ubuntu Pro)`.
 - **OSV skips withdrawn records**, and a record without any entry for the queried
   ecosystem and package no longer counts as affecting it (OSV matches ecosystems
   loosely).

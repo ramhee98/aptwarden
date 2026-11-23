@@ -31,6 +31,11 @@ def merge(per_source: list[tuple[int, list[Finding]]]) -> list[Finding]:
                 current.description = f.description
             if not current.urgency:
                 current.urgency = f.urgency
+            # A source may know where the fix is (OSV: only in Ubuntu Pro); keep that
+            # when the winner names the same fixed version.
+            if (not current.missing_source and f.missing_source
+                    and f.fixed_version == current.fixed_version):
+                current.missing_source = f.missing_source
     # A custom definition saying "not affected" overrules every other source.
     kept = (f for f in merged.values() if f.status != FindingStatus.NOT_AFFECTED)
     return sorted(kept, key=lambda f: f.key)

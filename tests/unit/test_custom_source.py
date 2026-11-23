@@ -161,3 +161,23 @@ def test_sync_failure_keeps_definitions(setup, monkeypatch):
 def test_relative_allowed_signers_resolve_against_config_dir(setup, tmp_path):
     src, _, _ = setup
     assert src.git.allowed_signers == tmp_path / "signers"
+
+
+def test_ubuntu_hosts_use_named_releases_only(setup, tmp_path):
+    src, _, state = setup
+    noble = defn(id="AW-2026-0004", aliases=["CVE-2026-0004"], package="openssl",
+                 summary="openssl: Ubuntu fix", action="report", affected=[
+                     {"release": "noble", "ranges": [
+                         {"introduced": "0", "fixed": "3.0.13-0ubuntu3.6"}]}])
+    defs = [definition(VALID, "AW-2026-0001.yaml"), definition(noble, "AW-2026-0004.yaml")]
+    state.set(**{"definitions.data": [d.to_dict() for d in defs]})
+    inv = HostInventory("u1", "ubuntu", "24.04", "noble", "trixie/sid", "amd64", [
+        Package("liblzma5:amd64", "5.6.1-1", "amd64", "xz-utils", "5.6.1-1", "ii "),
+        Package("openssl", "3.0.13-0ubuntu3.5", "amd64", "openssl", "3.0.13-0ubuntu3.5",
+                "ii ")], distro="ubuntu")
+    found = {f.vuln_id: f for f in src.match([inv])["u1"]}
+    # VALID blocks xz 5.6.x for "any" release: Debian only
+    assert set(found) == {"CVE-2026-0004"}
+    f = found["CVE-2026-0004"]
+    # no tracker data for Ubuntu releases: a fixed version counts as fixable
+    assert (f.status, f.fixed_version) == (FindingStatus.FIXABLE, "3.0.13-0ubuntu3.6")

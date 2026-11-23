@@ -51,3 +51,19 @@ def test_mark_missing_sources_with_unknown_suites():
     finding = f("CVE-1", "debian_tracker")
     mark_missing_sources([finding], None, lambda s: REPOS[s])
     assert finding.missing_source is None
+
+
+def test_merge_keeps_where_the_fix_is():
+    # a definition wins, but only OSV knows the fix is in Ubuntu Pro
+    pro = "noble-apps-security (Ubuntu Pro)"
+    custom = Finding("CVE-1", "catdoc", "1:0.95-5", FindingStatus.FIXABLE,
+                     fixed_version="1:0.95-5ubuntu0.1~esm1", origins=["custom"])
+    osv = Finding("CVE-1", "catdoc", "1:0.95-5", FindingStatus.FIXABLE,
+                  fixed_version="1:0.95-5ubuntu0.1~esm1", origins=["osv"], missing_source=pro)
+    [f] = merge([(0, [custom]), (50, [osv])])
+    assert f.origins == ["custom", "osv"] and f.missing_source == pro
+    # another fixed version: the marker does not describe the winner's fix
+    other = Finding("CVE-1", "catdoc", "1:0.95-5", FindingStatus.FIXABLE,
+                    fixed_version="1:0.95-6", origins=["custom"])
+    [f] = merge([(0, [other]), (50, [osv])])
+    assert f.missing_source is None

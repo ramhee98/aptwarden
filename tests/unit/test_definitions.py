@@ -42,7 +42,7 @@ def test_valid_definition():
 ])
 def test_evaluate_block_range(version, affected):
     d, _, _ = parse(VALID, "AW-2026-0001.yaml")
-    assert d.evaluate("trixie", version)[0] is affected
+    assert d.evaluate("trixie", version, distro="debian")[0] is affected
 
 
 def test_release_specific_ranges_and_any_fallback():
@@ -52,12 +52,12 @@ def test_release_specific_ranges_and_any_fallback():
     ], action="auto-patch")
     d, errors, _ = parse(text, "AW-2026-0001.yaml")
     assert errors == []
-    assert d.evaluate("trixie", "1.9-1") == (True, "2.0-1")
-    assert d.evaluate("bookworm", "1.5-1") == (True, None)
-    assert d.evaluate("bookworm", "1.6-1") == (False, None)
+    assert d.evaluate("trixie", "1.9-1", distro="debian") == (True, "2.0-1")
+    assert d.evaluate("bookworm", "1.5-1", distro="debian") == (True, None)
+    assert d.evaluate("bookworm", "1.6-1", distro="debian") == (False, None)
     only_trixie, _, _ = parse(defn(affected=[{"release": "trixie", "ranges": [
         {"introduced": "0", "fixed": "2.0-1"}]}]), "AW-2026-0001.yaml")
-    assert only_trixie.evaluate("bookworm", "1.0") is None  # no opinion
+    assert only_trixie.evaluate("bookworm", "1.0", distro="debian") is None  # no opinion
 
 
 @pytest.mark.parametrize("text, message", [
@@ -124,3 +124,25 @@ def test_yaml_aliases_are_rejected():
            "c: [*b, *b, *b, *b, *b, *b, *b, *b, *b]\n"
     d, errors, _ = parse(bomb, "AW-2026-0009.yaml")
     assert d is None and errors == ["AW-2026-0009.yaml: YAML aliases are not allowed"]
+
+
+def test_any_covers_debian_only():
+    # Ubuntu versions differ per release: "any" must not apply Debian ranges to them
+    text = defn(affected=[
+        {"release": "any", "ranges": [{"introduced": "0", "fixed": "2.0-1"}]},
+        {"release": "noble", "ranges": [{"introduced": "0", "fixed": "1.9-1ubuntu0.1"}]},
+    ], action="auto-patch")
+    d, errors, warnings = parse(text, "AW-2026-0001.yaml")
+    assert errors == [] and warnings == []  # Ubuntu codenames are known
+    assert d.evaluate("trixie", "1.9-1", distro="debian") == (True, "2.0-1")
+    assert d.evaluate("noble", "1.9-1", distro="ubuntu") == (True, "1.9-1ubuntu0.1")
+    assert d.evaluate("noble", "1.9-1ubuntu0.1", distro="ubuntu") == (False, None)
+    assert d.evaluate("resolute", "1.0-1", distro="ubuntu") is None  # not named: no opinion
+    # a Debian derivative still counts as Debian
+    assert d.evaluate("bookworm", "1.0-1", distro="debian") == (True, "2.0-1")
+
+
+def test_unknown_release_is_only_a_warning():
+    _, errors, warnings = parse(defn(affected=[{"release": "zesty", "ranges": [
+        {"introduced": "0"}]}]), "AW-2026-0001.yaml")
+    assert errors == [] and warnings == ["AW-2026-0001.yaml: unknown release 'zesty'"]

@@ -84,6 +84,12 @@ def test_wanted_pins_blocked_source_versions_except_the_installed():
                                               ("liblzma5", "5.8.1-3+b1"): "AW-2026-0001"}
     other_release = dataclasses.replace(inv, codename="bookworm")
     assert pins.wanted(other_release, blocks, SHOW) == {}
+    # "any" covers Debian releases only: an Ubuntu host gets no pins from it
+    any_release = pins.blocking([Definition.from_dict({**BLOCK_XZ, "affected": [
+        {**BLOCK_XZ["affected"][0], "release": "any"}]})])
+    assert len(pins.wanted(other_release, any_release, SHOW)) == 2
+    ubuntu = dataclasses.replace(inv, codename="noble", distro="ubuntu")
+    assert pins.wanted(ubuntu, any_release, SHOW) == {}
 
 
 def test_blocking_ignores_expired_and_other_actions():

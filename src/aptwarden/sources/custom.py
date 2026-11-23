@@ -111,7 +111,7 @@ class CustomSource(Source):
             findings = []
             for (source, version), binaries in inv.source_packages().items():
                 for d in by_package.get(source, []):
-                    verdict = d.evaluate(inv.codename, version)
+                    verdict = d.evaluate(inv.codename, version, distro=inv.distro)
                     if verdict is None:
                         continue
                     affected, fixed = verdict

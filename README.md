@@ -287,6 +287,10 @@ aptwarden defs validate DIR  # check a definitions directory, no config needed (
 
 - **Precedence:** a definition wins over the Debian tracker and OSV for the CVEs it
   lists, including "not affected".
+- **Releases:** `release: any` covers every Debian release, not Ubuntu: Ubuntu's
+  versions differ per release, so a definition for Ubuntu names each release (`noble`,
+  `resolute`, ...). Older aptwarden versions accept such definitions too; they only
+  warn about an unknown release.
 - **`block`:** an installed blocked version always raises an alert, and patch runs never
   install a blocked version. With `policy.enforce_block: pin` blocked versions are also
   pinned away on the host, see below.

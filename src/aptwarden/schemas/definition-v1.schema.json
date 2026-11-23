@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ramhee98/aptwarden/schemas/definition-v1.schema.json",
   "title": "aptwarden vulnerability definition, version 1",
-  "description": "One vulnerability of one Debian source package. Versions use Debian semantics (epoch:upstream-revision).",
+  "description": "One vulnerability of one Debian or Ubuntu source package. Versions use Debian semantics (epoch:upstream-revision).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "id", "summary", "severity", "package", "affected", "action"],
@@ -23,7 +23,7 @@
     "details": {"type": "string", "maxLength": 5000},
     "severity": {"enum": ["critical", "high", "medium", "low"]},
     "package": {
-      "description": "Debian source package name",
+      "description": "Source package name",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9+.-]+$"
     },
@@ -36,7 +36,7 @@
         "required": ["release", "ranges"],
         "properties": {
           "release": {
-            "description": "Debian codename (bookworm, trixie, ...) or \"any\"",
+            "description": "Debian or Ubuntu codename (trixie, noble, ...), or \"any\" for every Debian release (Ubuntu releases must be named: their versions differ per release)",
             "type": "string",
             "pattern": "^([a-z]+|any)$"
           },

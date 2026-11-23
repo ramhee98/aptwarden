@@ -270,7 +270,7 @@ class PatchRunner:
             t.run(["apt-cache", "show", "--no-all-versions", *specs]).stdout) if specs else {}
         for item in items:
             planner.resolve(item, candidates, installed, sources, self.definitions,
-                            inv.codename)
+                            inv.codename, distro=inv.distro)
         active = [i for i in items if not i.skipped]
         result.items = [i.to_dict() for i in active]
         result.skipped_items = [i.to_dict() for i in items if i.skipped]
