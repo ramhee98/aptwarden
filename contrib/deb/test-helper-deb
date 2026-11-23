@@ -1,0 +1,103 @@
+#!/bin/sh
+# Installs, upgrades over a manual installation, and removes the aptwarden-helper
+# package, checking the result after each step. Changes users, sudoers and packages:
+# run it as root in a disposable container or VM only (CI: debian:13).
+#
+#   APTWARDEN_DISPOSABLE=yes contrib/deb/test-helper-deb dist/aptwarden-helper_4_all.deb
+set -eu
+
+[ "${APTWARDEN_DISPOSABLE:-}" = yes ] || {
+    echo "test-helper-deb: changes this system; set APTWARDEN_DISPOSABLE=yes in a throwaway container" >&2
+    exit 1
+}
+[ "$(id -u)" = 0 ] || { echo "test-helper-deb: run as root" >&2; exit 1; }
+deb=$(realpath "$1")
+version=$(dpkg-deb -f "$deb" Version)
+HELPER=/usr/lib/aptwarden/aptwarden-helper
+LEGACY=/usr/local/lib/aptwarden/aptwarden-helper
+SUDOERS=/etc/sudoers.d/aptwarden
+PINS=/etc/apt/preferences.d/aptwarden-block
+export DEBIAN_FRONTEND=noninteractive
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+step() { echo "== $*"; }
+as_aptwarden() { runuser -u aptwarden -- "$@"; }
+
+install_deb() { apt-get install -y -q "$deb" >/dev/null; }
+
+check_installed() {  # check_installed yes|no (whether the legacy path is allowed)
+    getent passwd aptwarden >/dev/null || fail "user aptwarden missing"
+    [ "$(stat -c '%a %U:%G' "$SUDOERS")" = "440 root:root" ] || fail "$SUDOERS mode/owner"
+    visudo -cq || fail "visudo -c"
+    [ "$(stat -c '%a %U:%G' "$HELPER")" = "755 root:root" ] || fail "$HELPER mode/owner"
+    out=$(as_aptwarden sudo -n "$HELPER" version) || fail "sudo $HELPER version: $out"
+    [ "$out" = "aptwarden-helper $version" ] || fail "unexpected version: $out"
+    if [ "$1" = yes ]; then
+        [ "$(readlink "$LEGACY")" = "$HELPER" ] || fail "$LEGACY is not a link to $HELPER"
+        out=$(as_aptwarden sudo -n "$LEGACY" version) || fail "sudo $LEGACY version: $out"
+        [ "$out" = "aptwarden-helper $version" ] || fail "legacy path: $out"
+    else
+        ! grep -q "$LEGACY" "$SUDOERS" || fail "$LEGACY allowed in sudoers"
+    fi
+    # sudo allows nothing else, and the helper refuses unknown commands
+    ! as_aptwarden sudo -n /bin/true 2>/dev/null || fail "sudo allows /bin/true"
+    rc=0
+    as_aptwarden sudo -n "$HELPER" frobnicate 2>/dev/null || rc=$?
+    [ "$rc" = 2 ] || fail "unknown command exited $rc, expected 2"
+}
+
+check_removed() {
+    [ ! -e "$SUDOERS" ] || fail "$SUDOERS left behind"
+    [ ! -e "$HELPER" ] || fail "$HELPER left behind"
+    [ ! -L "$LEGACY" ] || fail "link $LEGACY left behind"
+    getent passwd aptwarden >/dev/null || fail "user aptwarden removed"
+}
+
+apt-get update -q >/dev/null
+
+step "fresh install pulls in sudo and creates the user"
+! getent passwd aptwarden >/dev/null || fail "user aptwarden exists before the test"
+install_deb
+check_installed yes
+apt-get purge -y -q aptwarden-helper >/dev/null
+check_removed
+
+step "upgrade over a manual installation (aptwarden helper show --install)"
+install -d -m 755 /usr/local/lib/aptwarden
+dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/lib/aptwarden/aptwarden-helper |
+    sed 's/^HELPER_VERSION=.*/HELPER_VERSION=3/' >"$LEGACY"
+chmod 755 "$LEGACY"
+printf 'aptwarden ALL=(root) NOPASSWD: %s\n' "$LEGACY" >"$SUDOERS"
+cp "$SUDOERS" /etc/sudoers.d/aptwarden.bak  # misnamed: sudo ignores it, postinst removes it
+chmod 440 "$SUDOERS" /etc/sudoers.d/aptwarden.bak
+[ "$(as_aptwarden sudo -n "$LEGACY" version)" = "aptwarden-helper 3" ] || fail "manual setup"
+install_deb
+check_installed yes
+[ ! -e /etc/sudoers.d/aptwarden.bak ] || fail "misnamed sudoers file left"
+
+step "reinstall (postinst is idempotent)"
+dpkg -i "$deb" >/dev/null
+check_installed yes
+
+step "remove keeps the pins, purge removes them"
+echo "Package: xz-utils" >"$PINS"
+apt-get remove -y -q aptwarden-helper >/dev/null
+check_removed
+[ ! -e /usr/local/lib/aptwarden ] || fail "/usr/local/lib/aptwarden left behind"
+[ -e "$PINS" ] || fail "remove deleted the pins"
+apt-get purge -y -q aptwarden-helper >/dev/null
+[ ! -e "$PINS" ] || fail "purge left the pins"
+
+step "a foreign file at the legacy path is left alone and not allowed"
+install -d -m 755 /usr/local/lib/aptwarden
+printf '#!/bin/sh\necho not ours\n' >"$LEGACY"
+chmod 755 "$LEGACY"
+install_deb
+check_installed no
+[ "$(sed -n 2p "$LEGACY")" = "echo not ours" ] || fail "foreign $LEGACY changed"
+apt-get purge -y -q aptwarden-helper >/dev/null
+check_removed
+[ -f "$LEGACY" ] || fail "foreign $LEGACY removed"
+rm -rf /usr/local/lib/aptwarden
+
+echo "ok: aptwarden-helper $version installs, upgrades a manual installation and removes cleanly"

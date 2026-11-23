@@ -1,0 +1,20 @@
+Package: aptwarden-helper
+Version: @VERSION@
+Architecture: all
+Maintainer: ramhee98 <32970397+ramhee98@users.noreply.github.com>
+Depends: sudo, passwd, apt
+Recommends: needrestart
+Section: admin
+Priority: optional
+Homepage: https://github.com/ramhee98/aptwarden
+Description: root helper for aptwarden on patched Debian hosts
+ aptwarden scans Debian hosts over SSH for vulnerable packages and patches
+ them. On a target host, every action that needs root goes through this
+ small POSIX sh helper. sudo allows the user aptwarden to run it and nothing
+ else. It has fixed subcommands, validates every package=version argument,
+ and installs only exactly the simulated versions from the host's own apt
+ sources.
+ .
+ The package installs the helper, writes /etc/sudoers.d/aptwarden and
+ creates the user aptwarden if it is missing. The central host's SSH key
+ still has to be added to ~aptwarden/.ssh/authorized_keys.

@@ -2,7 +2,8 @@
 # aptwarden-helper: the only program aptwarden runs as root on a target host.
 #
 # Install root-owned as /usr/local/lib/aptwarden/aptwarden-helper (mode 0755)
-# and allow it, and nothing else, in /etc/sudoers.d/aptwarden. A sudoers rule
+# and allow it, and nothing else, in /etc/sudoers.d/aptwarden; or install the
+# aptwarden-helper package, which puts it in /usr/lib/aptwarden. A sudoers rule
 # on apt-get itself would be root for anyone who can pass options
 # (-o APT::Update::Pre-Invoke::=/bin/sh). This script only accepts fixed
 # subcommands and strictly validated "package=version" arguments. pin writes

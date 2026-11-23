@@ -1,0 +1,92 @@
+#!/bin/sh
+# postinst of aptwarden-helper: the sudoers rule, the user aptwarden and the
+# compatibility link at the path the manual installer used.
+set -eu
+
+HELPER=/usr/lib/aptwarden/aptwarden-helper
+# aptwarden's default ssh.helper, and where `aptwarden helper show --install`
+# puts the helper. Kept working as a symlink to the packaged helper.
+LEGACY_DIR=/usr/local/lib/aptwarden
+LEGACY=$LEGACY_DIR/aptwarden-helper
+SUDOERS=/etc/sudoers.d/aptwarden
+
+# root-owned and writable by nobody else: otherwise someone could swap the
+# link that sudo allows
+safe_dir() {
+    [ -d "$1" ] && [ ! -L "$1" ] && [ "$(stat -c %u "$1")" = 0 ] &&
+        [ -z "$(find "$1" -maxdepth 0 -perm /022)" ]
+}
+
+# Points $LEGACY at the packaged helper if that is safe. Replaces only what an
+# earlier aptwarden installer (or this package) put there. Prints "yes" if the
+# legacy path may go into the sudoers rule.
+legacy_link() {
+    for d in /usr/local /usr/local/lib; do
+        safe_dir "$d" || { echo "aptwarden-helper: $d is not root-only, $LEGACY not set up" >&2; return 0; }
+    done
+    if [ ! -e "$LEGACY_DIR" ] && [ ! -L "$LEGACY_DIR" ]; then
+        install -d -m 755 -o root -g root "$LEGACY_DIR"
+    fi
+    if ! safe_dir "$LEGACY_DIR"; then
+        echo "aptwarden-helper: $LEGACY_DIR is not a root-only directory, $LEGACY not set up" >&2
+        return 0
+    fi
+    if [ -L "$LEGACY" ]; then
+        if [ "$(readlink "$LEGACY")" != "$HELPER" ]; then
+            echo "aptwarden-helper: $LEGACY links elsewhere, left alone and not allowed in sudoers" >&2
+            return 0
+        fi
+    elif [ -e "$LEGACY" ]; then
+        if [ ! -f "$LEGACY" ] || ! sed -n 2p "$LEGACY" | grep -q '^# aptwarden-helper: '; then
+            echo "aptwarden-helper: $LEGACY is not an aptwarden helper, left alone and not allowed in sudoers" >&2
+            return 0
+        fi
+        echo "aptwarden-helper: replacing the manually installed $LEGACY with a link to $HELPER" >&2
+    fi
+    if [ ! -L "$LEGACY" ]; then
+        ln -sfn "$HELPER" "$LEGACY.dpkg-new"
+        mv -f "$LEGACY.dpkg-new" "$LEGACY"
+    fi
+    echo yes
+}
+
+write_sudoers() {
+    cmds=$HELPER
+    [ "$1" = yes ] && cmds="$cmds, $LEGACY"
+    tmp=$(mktemp)
+    cat >"$tmp" <<SUDOERS_EOF
+# /etc/sudoers.d/aptwarden (mode 0440), written by the aptwarden-helper package
+# (postinst). aptwarden may run its helper as root, nothing else. The helper
+# validates every argument itself. Removed with the package.
+Defaults:aptwarden !lecture, env_reset
+aptwarden ALL=(root) NOPASSWD: $cmds
+SUDOERS_EOF
+    if ! visudo -cqf "$tmp"; then
+        rm -f "$tmp"
+        echo "aptwarden-helper: sudoers rule rejected by visudo, $SUDOERS not changed" >&2
+        exit 1
+    fi
+    chown root:root "$tmp"
+    chmod 0440 "$tmp"
+    mv -f "$tmp" "$SUDOERS"
+    # sudo silently ignores sudoers.d files whose name contains a dot
+    rm -f /etc/sudoers.d/aptwarden.* /etc/sudoers.d/aptwarden~
+}
+
+case "${1:-}" in
+    configure)
+        if ! getent passwd aptwarden >/dev/null; then
+            useradd --system --create-home --shell /bin/sh aptwarden
+            home=$(getent passwd aptwarden | cut -d: -f6)
+            echo "aptwarden-helper: created user aptwarden; add the central host's key to" \
+                "$home/.ssh/authorized_keys (see aptwarden's README, Target hosts)" >&2
+        fi
+        write_sudoers "$(legacy_link)"
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *)
+        echo "postinst called with unknown argument '${1:-}'" >&2
+        exit 1
+        ;;
+esac
+exit 0

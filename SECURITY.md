@@ -23,7 +23,7 @@ as a safety net.
 | **Central host** (aptwarden user, `/etc/aptwarden`) | everything below: SSH key, Proxmox token, SMTP credentials, configuration | An attacker can upgrade, restart, reboot or roll back every patch host, and snapshot and roll back every guest in the Proxmox pool. Protect it like a configuration management server. |
 | **Configuration** | targets of healthchecks, URLs of data sources, hosts, policies | Writable only by root. It is trusted like code, see [Configuration](#configuration). |
 | **Target hosts** | their own package list and service state | A host can lie about its packages, so its report is wrong. It cannot run code on the central host: output is parsed, never executed. A hostile web service on it is handled by the healthcheck redirect rules. |
-| **Root helper** on target hosts | the only thing sudo allows | Fixed subcommands. Arguments are validated as `package=version`. `install` simulates first and installs only if apt would install exactly the named packages and versions and remove nothing. `pin` writes only its own file in `/etc/apt/preferences.d`, with priority -1 for the named versions: it can keep a version out but never force one in. Package maintainer scripts still run as root, so the trust in the host's apt sources stays as it is. |
+| **Root helper** on target hosts | the only thing sudo allows | Fixed subcommands. Arguments are validated as `package=version`. `install` simulates first and installs only if apt would install exactly the named packages and versions and remove nothing. `pin` writes only its own file in `/etc/apt/preferences.d`, with priority -1 for the named versions: it can keep a version out but never force one in. Package maintainer scripts still run as root, so the trust in the host's apt sources stays as it is. The central host cannot install or replace the helper, see [Distributing the helper](#distributing-the-helper). |
 | **Proxmox API** | snapshots and rollbacks of the pool's guests | The certificate fingerprint is pinned. The token is limited to one pool and four privileges, see [Minimum privileges](#minimum-privileges). |
 | **Data sources** (Debian tracker, OSV, NVD, CISA KEV) | vulnerability data | Bad data causes wrong reports and wrong patch selection, but cannot run code. Responses are limited in size (256 MiB received and 256 MiB decompressed, read in blocks), and only `http(s)` URLs are used. Only fixed versions from the host's own apt sources are ever installed. |
 | **Definitions repository** | overriding source data (`not-affected`, `block`, `auto-patch`) | Only tags signed by a key in `allowed_signers` are accepted, never older than the accepted commit. The archive is read with limits: 32 MiB, 5000 entries, 256 KiB per file, 16 MiB in total. No symlinks, no YAML aliases. A stolen signing key can hide vulnerabilities or block fixes, so keep it offline. |
@@ -41,8 +41,10 @@ data sources beyond the size limits.
 - Report-only hosts need no sudo at all.
 - Patch hosts allow exactly one command in sudoers:
   `aptwarden ALL=(root) NOPASSWD: /usr/local/lib/aptwarden/aptwarden-helper`.
+  The `aptwarden-helper` package allows the same helper under its two paths,
+  `/usr/lib/aptwarden/aptwarden-helper` and the link to it at the old path.
 - `aptwarden helper show --sudoers` prints the rule, and `--install` sets everything
-  up. See the README, "Target hosts: helper and sudo".
+  up; or install the package. See the README, "Target hosts: helper and sudo".
 
 **Host keys:**
 - `strict_host_key_checking: yes`, with aptwarden's own `known_hosts` file.
@@ -68,6 +70,41 @@ data sources beyond the size limits.
 
 **Status page publishing:** a separate SSH key, limited on the web server to
 `rrsync -wo` into one directory.
+
+## Distributing the helper
+
+The helper is the one program aptwarden may run as root on a target, so whoever can
+replace it is root there. aptwarden therefore gives the central host **no** way to
+install or update it:
+
+- **No update command.** The helper has fixed subcommands; none writes code or
+  replaces the helper. `install` only installs `package=version` pairs from the host's
+  own apt sources (see the root helper above), so the central host can pick versions
+  but cannot bring its own packages.
+- **Updates come through the host's own channels:** the `aptwarden-helper` package
+  from an apt repository the host trusts (`Signed-By`) or from configuration
+  management, or the installer script run by an administrator. A self-update signed by
+  the central host was rejected: it would rebuild package management, and a compromise
+  of its signing key would be root on every host.
+- **Keep those channels off the central host.** Whoever controls the apt repository's
+  signing key or the configuration management is root on every host that uses it. Do
+  not run them on the central aptwarden host and do not give it their keys or
+  credentials; otherwise a compromised central host would be root everywhere, which
+  the helper design exists to prevent.
+- **Verify the package.** CI artifacts are not signed. The build is reproducible: check
+  out the signed release tag, verify it, build the package with
+  `tools/build-helper-deb` and compare its checksum with the CI artifact before adding
+  it to your repository, which then signs it with your own key.
+- **What the package does as root:** its postinst creates the user `aptwarden` if it is
+  missing (no key, so no login), writes `/etc/sudoers.d/aptwarden` (0440) only after
+  `visudo -c` accepts it, and links `/usr/local/lib/aptwarden/aptwarden-helper` to the
+  packaged helper. It replaces only a helper left there by the installer script, and
+  only in root-owned directories that nobody else can write to; anything else at that
+  path is left alone and not allowed in sudoers. Removing the package deletes the rule
+  and the link.
+- **One version, one content.** The package version is the helper version, and a test
+  fails if the packaged files change without a new version, so a repository never
+  holds two different packages under one version.
 
 ## Snapshots and rollbacks: residual risks
 
@@ -134,12 +171,14 @@ The CI workflow runs these checks:
   **[CodeQL](https://codeql.github.com/)** (`security-extended`) on the code.
 - **[pip-audit](https://pypi.org/project/pip-audit/)** on the dependencies, on every
   push and weekly.
-- **[ShellCheck](https://www.shellcheck.net/)** on the root helper and the generated
-  installer.
+- **[ShellCheck](https://www.shellcheck.net/)** on the root helper, the generated
+  installer and the package's maintainer scripts.
+- **The helper package** is built twice (the build must be reproducible), then
+  installed, upgraded over a manual installation and removed in a Debian 13 container.
 - **[zizmor](https://docs.zizmor.sh/)** on the workflow itself, and
   **[gitleaks](https://github.com/gitleaks/gitleaks)** on the whole git history.
 
-Release tags get a CycloneDX SBOM. Actions are pinned to commit SHAs, and checkouts
+Release tags get a CycloneDX SBOM and the helper package. Actions are pinned to commit SHAs, and checkouts
 keep no credentials. bandit, pip-audit and zizmor are installed from
 `.github/requirements-ci.txt`, pinned with hashes. Dependabot keeps both current. It
 proposes a new version only once it is 7 days old, by when compromised or broken

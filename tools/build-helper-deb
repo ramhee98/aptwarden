@@ -1,0 +1,48 @@
+#!/bin/sh
+# Builds the Debian package aptwarden-helper (Architecture: all) from the helper in
+# src/aptwarden/helper and the maintainer scripts in contrib/deb/aptwarden-helper.
+#
+#   tools/build-helper-deb [OUTDIR]     (default: dist), prints the path of the .deb
+#
+# The package version is the helper's HELPER_VERSION. A change to the helper or to
+# the package raises it, so one version always has the same content (an apt
+# repository refuses a version it already has with other content). The build is
+# reproducible: all times are SOURCE_DATE_EPOCH, by default the time of the last
+# commit that changed one of the packaged files.
+set -eu
+umask 022
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+out=${1:-$root/dist}
+helper=$root/src/aptwarden/helper/aptwarden-helper
+debsrc=$root/contrib/deb/aptwarden-helper
+
+version=$(sed -n 's/^HELPER_VERSION=\([0-9][0-9]*\)$/\1/p' "$helper")
+[ -n "$version" ] || { echo "build-helper-deb: HELPER_VERSION not found in $helper" >&2; exit 1; }
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH=$(git -C "$root" log -1 --format=%ct -- \
+        src/aptwarden/helper/aptwarden-helper contrib/deb/aptwarden-helper LICENSE)
+fi
+case "$SOURCE_DATE_EPOCH" in
+    ''|*[!0-9]*) echo "build-helper-deb: set SOURCE_DATE_EPOCH (no git history)" >&2; exit 1 ;;
+esac
+export SOURCE_DATE_EPOCH
+
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+pkg=$stage/aptwarden-helper
+install -d -m 755 "$pkg/DEBIAN" "$pkg/usr/lib/aptwarden" "$pkg/usr/share/doc/aptwarden-helper"
+install -m 755 "$helper" "$pkg/usr/lib/aptwarden/aptwarden-helper"
+install -m 644 "$root/LICENSE" "$pkg/usr/share/doc/aptwarden-helper/copyright"
+install -m 755 "$debsrc/postinst" "$debsrc/postrm" "$pkg/DEBIAN/"
+size=$(du -sk --apparent-size "$pkg/usr" | cut -f1)
+sed -e "s/@VERSION@/$version/" -e "/^Architecture:/a Installed-Size: $size" \
+    "$debsrc/control.in" >"$pkg/DEBIAN/control"
+(cd "$pkg" && find usr -type f | LC_ALL=C sort | xargs md5sum) >"$pkg/DEBIAN/md5sums"
+chmod 644 "$pkg/DEBIAN/control" "$pkg/DEBIAN/md5sums"
+find "$pkg" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+
+mkdir -p "$out"
+deb=$out/aptwarden-helper_${version}_all.deb
+dpkg-deb --root-owner-group -Zxz --build "$pkg" "$deb" >/dev/null
+echo "$deb"

@@ -11,6 +11,24 @@ commits.
   need helper version 4; patching works with helper 3 again. This corrects the 0.9.0
   upgrade note: hosts that patch but do not pin need no reinstall.
 
+### Helper package
+
+- **The helper as a Debian package, for fleets.** `aptwarden-helper_<version>_all.deb`
+  (version = helper version) installs the helper as `/usr/lib/aptwarden/aptwarden-helper`,
+  writes `/etc/sudoers.d/aptwarden` after checking it with `visudo -c`, and creates the
+  user `aptwarden` if it is missing (the SSH key is still yours to add). It links
+  `/usr/local/lib/aptwarden/aptwarden-helper` to the packaged helper, replacing one the
+  installer script left there, so the default `ssh.helper` works for hosts with and
+  without the package. Install and update it through your own signed apt repository or
+  configuration management; the README shows `apt install ./…deb`, reprepro and
+  Ansible. CI builds it reproducibly, installs, upgrades and removes it in a Debian 13
+  container, and attaches it to release tags (`aptwarden-helper-deb` artifact).
+  `tools/build-helper-deb` builds it locally.
+- **The installer script refuses to run where the package is installed,** since it
+  would overwrite the package's link and sudoers rule.
+- SECURITY.md: new section "Distributing the helper". The central host still has no
+  way to install or replace the helper.
+
 ### Patching
 
 - **A minimum helper version per feature instead of the exact version.** Patching needs

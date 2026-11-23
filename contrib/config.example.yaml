@@ -12,7 +12,8 @@ log:
 
 ssh:                               # defaults for all hosts, overridable per host
   user: aptwarden
-  helper: /usr/local/lib/aptwarden/aptwarden-helper
+  helper: /usr/local/lib/aptwarden/aptwarden-helper  # also right with the aptwarden-helper
+                                   # package, which links it to /usr/lib/aptwarden/aptwarden-helper
   port: 22
   identity_file: /etc/aptwarden/ssh/id_ed25519
   known_hosts_file: /var/lib/aptwarden/known_hosts

@@ -200,10 +200,12 @@ back or delete a snapshot a running patch depends on.
 
 A sudoers rule on `apt-get` itself amounts to root (`-o APT::Update::Pre-Invoke::=/bin/sh`).
 Target hosts therefore get `/usr/local/lib/aptwarden/aptwarden-helper`
-(`aptwarden helper show`), a POSIX shell script owned by root. Its properties:
+(`aptwarden helper show`), a POSIX shell script owned by root. The `aptwarden-helper`
+Debian package installs it as `/usr/lib/aptwarden/aptwarden-helper` and links the old
+path to it, so `ssh.helper` stays the same in mixed fleets. Its properties:
 
 - **Fixed subcommands:** `version`, `update`, `simulate`, `install`, `needrestart
-  list|restart` and `reboot`.
+  list|restart`, `pin` and `reboot`.
 - **Strict argument checks:** arguments must be `package=version` with a restricted
   character set. Package names start alphanumeric, so options are impossible, and
   `--` separates them for apt.
@@ -220,6 +222,12 @@ Target hosts therefore get `/usr/local/lib/aptwarden/aptwarden-helper`
 
 sudo allows exactly this script (`aptwarden helper show --sudoers`). Inventory needs no
 privileges.
+
+**Versions:** each feature needs a minimum helper version (`HELPER_FEATURES` in
+`patch/runner.py`: patching 3, `pin` 4); newer helpers are accepted. A new helper
+version therefore does not stop patching on hosts that have not updated yet, only the
+feature that needs it. The central host has no way to replace the helper: updates come
+through the host's own apt sources (the package) or whoever runs the installer.
 
 ### Proxmox token
 

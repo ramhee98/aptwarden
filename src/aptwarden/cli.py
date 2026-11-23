@@ -643,6 +643,12 @@ set -eu
 umask 022
 
 [ "$(id -u)" = 0 ] || {{ echo "aptwarden: run this as root" >&2; exit 1; }}
+# the package owns the helper and the sudoers rule; this script would overwrite them
+if dpkg -s aptwarden-helper 2>/dev/null | grep -qx 'Status: install ok installed'; then
+    echo "aptwarden: the aptwarden-helper package is installed; update it with apt instead" >&2
+    echo "  (see README: Target hosts: helper and sudo)" >&2
+    exit 1
+fi
 id aptwarden >/dev/null 2>&1 || {{
     echo "aptwarden: user 'aptwarden' missing: create it and add the central host's key first" >&2
     echo "  (see README: Target hosts)" >&2

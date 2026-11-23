@@ -222,12 +222,13 @@ Notes on updating:
   systemctl daemon-reload
   ```
 
-- **The helper on patch targets is not updated automatically.** Each feature needs a
+- **The helper on patch targets is not updated by aptwarden.** Each feature needs a
   minimum helper version, so a new aptwarden release does not stop patching on hosts
   with an older helper; only a feature that needs a newer helper is refused there.
   `hosts check` shows the version and what it lacks, e.g. `helper 3 ok (pin needs 4)`,
-  and `helper NOT ready: outdated helper` when the host uses such a feature. Refresh it
-  with `aptwarden helper show --install`, see
+  and `helper NOT ready: outdated helper` when the host uses such a feature. Update it
+  with the `aptwarden-helper` package (apt, configuration management) or
+  `aptwarden helper show --install`, see
   [Target hosts: helper and sudo](#target-hosts-helper-and-sudo).
 
 ## Configuration
@@ -435,22 +436,23 @@ database writes. The window is minutes, but for mail and database hosts consider
 A sudoers rule on `apt-get` itself would be root for anyone who can pass options. Target
 hosts therefore get a small root-owned helper. Patching needs it, and so does
 [`enforce_block: pin`](#pinning-blocked-versions-away-enforce_block-pin). It has fixed
-subcommands and validates every `package=version`. Before it installs, it simulates the transaction itself and refuses it
-if apt would install anything not named with exactly that version, or remove anything.
-sudo allows this one script and nothing else:
+subcommands and validates every `package=version`. Before it installs, it simulates the
+transaction itself and refuses it if apt would install anything not named with exactly
+that version, or remove anything. sudo allows this one script and nothing else.
 
-`aptwarden helper show --install` prints a self-contained script that installs everything
-in one step. Run it as root on the target. The script:
+There are two ways to install it:
 
-- installs sudo if it is missing (and needrestart with `--with-needrestart`),
-- writes helper and sudoers rule with the right owner and mode, and removes misnamed
-  rule files (sudo silently ignores files with a dot in their name),
-- validates the rule with `visudo` and checks the helper as user `aptwarden`.
+- **The `aptwarden-helper` Debian package**, for fleets: installed and updated through
+  your own apt repository or configuration management, like any other package. See
+  [Helper package](#helper-package).
+- **The installer script** (`aptwarden helper show --install`), for a few hosts: piped
+  to each host over SSH, by hand. See [Installer script](#installer-script).
 
-It is idempotent, so you can run it again after an update to refresh the helper.
+The central host cannot install or update the helper itself, in either case. See
+[SECURITY.md](SECURITY.md#distributing-the-helper).
 
-**Helper versions:** the installer always writes the newest helper, but aptwarden does
-not require it. Each feature needs a minimum version, and newer helpers are accepted:
+**Helper versions:** aptwarden does not require the newest helper. Each feature needs a
+minimum version, and newer helpers are accepted:
 
 | Feature | Helper commands | Needs |
 |---|---|---|
@@ -461,7 +463,123 @@ A host with an older helper keeps working for everything its version supports. O
 feature it is too old for is refused, with a message that names the feature and the
 version it needs (`outdated helper (aptwarden-helper 3; enforce_block: pin needs version
 4 or newer)`). `hosts check` shows what the installed helper can do, e.g. `helper 3 ok
-(pin needs 4)`, so you can update hosts when it suits you.
+(pin needs 4)`, so you can roll out a new helper when it suits you.
+
+The user `aptwarden` with the central host's key must exist (see
+[Target hosts](#target-hosts)); the package creates the user if it is missing, but not
+the key. Check from the central host afterwards:
+
+```sh
+runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helper 4 ok"
+```
+
+#### Helper package
+
+`aptwarden-helper_<version>_all.deb` (`Architecture: all`, version = helper version)
+contains the helper as `/usr/lib/aptwarden/aptwarden-helper`. Its postinst:
+
+- creates the user `aptwarden` (`useradd --system --create-home --shell /bin/sh`) if it
+  is missing. The `authorized_keys` entry is yours to add, as in
+  [Target hosts](#target-hosts),
+- links `/usr/local/lib/aptwarden/aptwarden-helper` (the default `ssh.helper`, where
+  the installer script puts it) to the packaged helper, replacing a helper the
+  installer script left there, so the configuration stays the same in a mixed fleet.
+  Anything else at that path is left alone and not allowed in sudoers,
+- writes `/etc/sudoers.d/aptwarden` (0440) for both paths, checked with `visudo -c`
+  first, and removes misnamed rule files.
+
+`apt remove` deletes the sudoers rule and the link; the user stays. `apt purge` also
+deletes the pins of `enforce_block: pin`. sudo comes in as a dependency, needrestart as a
+recommendation. With only the package in the fleet you can also set
+`ssh.helper: /usr/lib/aptwarden/aptwarden-helper`.
+
+**Getting the package:** CI builds it for every release tag (artifact
+`aptwarden-helper-deb` of the tag's workflow run). The build is reproducible, so you can
+also build it yourself from the verified tag and compare the checksum:
+
+```sh
+# in a clone whose release tag you verified as in Updating ("Installing a verified release")
+git -C /root/aptwarden-src checkout --quiet vX.Y.Z
+/root/aptwarden-src/tools/build-helper-deb /tmp/helper-deb   # needs dpkg-deb and git
+sha256sum /tmp/helper-deb/aptwarden-helper_4_all.deb         # same as the CI artifact
+```
+
+**A single host,** or to try it:
+
+```sh
+apt install ./aptwarden-helper_4_all.deb
+```
+
+**Your own signed apt repository** (e.g. [reprepro](https://salsa.debian.org/debian/reprepro)
+or [aptly](https://www.aptly.info/)), on a host other than the central aptwarden host.
+With reprepro, `conf/distributions` in the repository directory:
+
+```
+Codename: aptwarden
+Components: main
+Architectures: amd64 arm64
+SignWith: REPO-KEY-FINGERPRINT
+```
+
+```sh
+reprepro -b /srv/apt includedeb aptwarden aptwarden-helper_4_all.deb   # each new version
+```
+
+On each target, once (the public key of the repository in `/etc/apt/keyrings`):
+
+```
+# /etc/apt/sources.list.d/aptwarden.sources
+Types: deb
+URIs: https://apt.example.org/
+Suites: aptwarden
+Components: main
+Signed-By: /etc/apt/keyrings/aptwarden.asc
+```
+
+```sh
+apt update && apt install aptwarden-helper
+```
+
+New versions then arrive with the host's normal `apt upgrade`, or with
+unattended-upgrades if you add the repository's origin to
+`Unattended-Upgrade::Origins-Pattern`.
+
+**Ansible:** with the repository above, or by copying the `.deb`:
+
+```yaml
+- hosts: aptwarden_targets
+  become: true
+  tasks:
+    - name: aptwarden-helper from our apt repository
+      ansible.builtin.apt:
+        name: aptwarden-helper
+        state: latest
+        update_cache: true
+    # or without a repository:
+    # - ansible.builtin.copy: {src: aptwarden-helper_4_all.deb, dest: /var/cache/aptwarden-helper_4_all.deb}
+    # - ansible.builtin.apt: {deb: /var/cache/aptwarden-helper_4_all.deb}
+    - name: the central host's key
+      ansible.posix.authorized_key:
+        user: aptwarden
+        key: "{{ aptwarden_central_key }}"
+        key_options: 'restrict,from="192.0.2.5"'
+        exclusive: true
+```
+
+#### Installer script
+
+`aptwarden helper show --install` prints a self-contained script that installs everything
+in one step. Run it as root on the target. The script:
+
+- installs sudo if it is missing (and needrestart with `--with-needrestart`),
+- writes helper and sudoers rule with the right owner and mode, and removes misnamed
+  rule files (sudo silently ignores files with a dot in their name),
+- validates the rule with `visudo` and checks the helper as user `aptwarden`,
+- refuses to run where the `aptwarden-helper` package is installed; update the package
+  instead.
+
+It always installs the newest helper. It is idempotent, so you can run it again after an
+update to refresh the helper.
 
 ```sh
 # via SSH as root
@@ -470,16 +588,12 @@ aptwarden helper show --install | ssh root@TARGET sh
 aptwarden helper show --install | ssh root@PVE-NODE pct exec VMID -- sh
 ```
 
-The user `aptwarden` with the central host's key must exist first (see
-[Target hosts](#target-hosts)). Check from the central host afterwards:
-
-```sh
-runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helper 4 ok"
-```
+#### needrestart
 
 With `policy.restart: auto` (the default), install `needrestart` too, so that services
 using an updated library are restarted. Without it, a patched host keeps running the
-old code until the next restart. `--with-needrestart` makes the installer take care of
+old code until the next restart. The package recommends it, so apt installs it unless
+recommends are turned off. `--with-needrestart` makes the installer script take care of
 it:
 
 ```sh
@@ -488,7 +602,7 @@ aptwarden helper show --install --with-needrestart | ssh root@PVE-NODE pct exec 
 ```
 
 If installing a package fails, for example because of stale package lists, the
-installer runs `apt-get update` once and retries. This applies to sudo and needrestart.
+installer script runs `apt-get update` once and retries. This applies to sudo and needrestart.
 
 needrestart needs no configuration. During a patch, aptwarden suppresses its apt hook
 and runs it explicitly according to `policy.restart`. For your own `apt` runs it keeps
@@ -973,6 +1087,9 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 | `/etc/aptwarden/allowed_signers` | keys trusted for signed definition releases |
 | `/etc/aptwarden/publish.env` | `PUBLISH_TARGET` for the status page push |
 | `/var/lib/aptwarden/known_hosts` | SSH host keys of the targets |
+| `/usr/local/lib/aptwarden/aptwarden-helper` | target hosts: the root helper (a link with the package) |
+| `/usr/lib/aptwarden/aptwarden-helper` | target hosts: the root helper from the `aptwarden-helper` package |
+| `/etc/sudoers.d/aptwarden` | target hosts: the sudo rule for the helper |
 
 ## Known limitations
 
@@ -1042,8 +1159,12 @@ git push origin v0.9.0
 CI also runs [bandit](https://bandit.readthedocs.io/) and CodeQL on `src`,
 [pip-audit](https://pypi.org/project/pip-audit/) on the dependencies (on every push and
 weekly), ShellCheck on the root helper, zizmor on the workflow and gitleaks on the
-history; see [SECURITY.md](SECURITY.md#security-checks-in-ci). For release tags it
-attaches a CycloneDX SBOM (`sbom` artifact). Dependabot keeps the pinned action SHAs
+history; see [SECURITY.md](SECURITY.md#security-checks-in-ci). It builds the helper
+package (`tools/build-helper-deb`, twice to check that the build is reproducible) and
+installs, upgrades and removes it in a Debian 13 container
+(`contrib/deb/test-helper-deb`). For release tags it attaches a CycloneDX SBOM (`sbom`
+artifact) and the helper package (`aptwarden-helper-deb` artifact). A change to the
+helper or to `contrib/deb/` raises `HELPER_VERSION`, which is also the package version. Dependabot keeps the pinned action SHAs
 and the hash-pinned CI tools current, proposing a new version only once it is a week
 old (security updates right away).
 

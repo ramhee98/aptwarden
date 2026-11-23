@@ -1,0 +1,29 @@
+#!/bin/sh
+# postrm of aptwarden-helper: removes what postinst created. The user
+# aptwarden stays (Debian does not remove system users), with its home.
+set -eu
+
+HELPER=/usr/lib/aptwarden/aptwarden-helper
+LEGACY_DIR=/usr/local/lib/aptwarden
+LEGACY=$LEGACY_DIR/aptwarden-helper
+
+case "${1:-}" in
+    remove|purge)
+        rm -f /etc/sudoers.d/aptwarden
+        if [ -L "$LEGACY" ] && [ "$(readlink "$LEGACY")" = "$HELPER" ]; then
+            rm -f "$LEGACY"
+            rmdir "$LEGACY_DIR" 2>/dev/null || true
+        fi
+        # pins written by "aptwarden-helper pin" (enforce_block: pin). Kept on
+        # remove, so blocked versions stay out until the helper is back.
+        if [ "$1" = purge ]; then
+            rm -f /etc/apt/preferences.d/aptwarden-block
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear) ;;
+    *)
+        echo "postrm called with unknown argument '${1:-}'" >&2
+        exit 1
+        ;;
+esac
+exit 0
