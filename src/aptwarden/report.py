@@ -90,6 +90,13 @@ def _top_label(f: Finding) -> str:
     return " ".join(parts)
 
 
+def version_change(item: dict, arrow: str = "->") -> tuple[str, str]:
+    """A patch item's source package and ``old -> new`` from a stored patch result.
+    Results from before an item was resolved lack versions; ``?`` stands for them."""
+    return item["source_package"], (f"{item.get('installed') or '?'} {arrow} "
+                                     f"{item.get('target_source_version') or '?'}")
+
+
 def truncate(text: str, width: int) -> str:
     text = " ".join(text.split())
     return text if len(text) <= width else text[: width - 1] + "…"

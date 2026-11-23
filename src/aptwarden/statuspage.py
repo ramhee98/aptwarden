@@ -27,7 +27,7 @@ from aptwarden.definitions import Definition
 from aptwarden.models import Finding, FindingStatus, Severity
 from aptwarden.patch import planner, window
 from aptwarden.patch.runner import policy_skip_reason
-from aptwarden.report import group_findings, truncate
+from aptwarden.report import group_findings, truncate, version_change
 from aptwarden.sources.custom import stored_definitions
 from aptwarden.state import HostRecord, State
 
@@ -61,6 +61,7 @@ th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertic
 th{font-weight:600;color:var(--muted);white-space:nowrap}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 .sev{font-weight:600;white-space:nowrap}
+.pkg{white-space:nowrap}
 .critical{color:var(--crit)}.high{color:var(--high)}.medium{color:var(--med)}
 .low{color:var(--low)}.unknown{color:var(--unk)}
 .badge{display:inline-block;padding:0 6px;border-radius:4px;border:1px solid currentColor;
@@ -493,10 +494,13 @@ def _host_section(rec: HostRecord, latest_error: str | None, patches: list[dict]
         parts.append('<h3>Patch history</h3><div class="wrap"><table>'
                      + _head("Started", "Status", "Packages", "Snapshot", "Reason"))
         for p in patches:
-            pkgs = ", ".join(i["source_package"] for i in p.get("items", []))
+            # one package per line, never broken inside its "old → new"
+            pkgs = "<br>".join(f'<span class="pkg">{_e(name)} <code>{_e(change)}</code></span>'
+                               for name, change in
+                               (version_change(i, "→") for i in p.get("items", [])))
             snap = (p.get("snapshot") or {}).get("name", "-")
             parts.append(f"<tr><td>{_ts(p.get('started_at'), tz)}</td>"
-                         f"<td>{_patch_badge(p.get('status'))}</td><td>{_e(pkgs or '-')}</td>"
+                         f"<td>{_patch_badge(p.get('status'))}</td><td>{pkgs or '-'}</td>"
                          f"<td><code>{_e(snap)}</code></td>"
                          f"<td>{_e(truncate(p.get('reason', ''), 160))}</td></tr>")
         parts.append("</table></div>")

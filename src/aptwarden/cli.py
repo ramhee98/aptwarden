@@ -583,7 +583,14 @@ def cmd_patches(args, cfg: config.Config) -> int:
                      f"{len(pkgs)}: {report.truncate(','.join(pkgs), 30)}" if pkgs else "-",
                      (p.get("snapshot") or {}).get("name", "-"),
                      report.truncate(p["reason"], 60)])
-    print("\n".join(report.format_table(rows, indent="")))
+    table = report.format_table(rows, indent="")
+    lines = table[:1]
+    # each run's packages with their versions below its row
+    for p, row in zip(history, table[1:], strict=True):
+        lines.append(row)
+        lines += [f"    {name} {change}" for name, change in map(report.version_change,
+                                                                    p["items"])]
+    print("\n".join(lines))
     return EXIT_OK
 
 

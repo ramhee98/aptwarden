@@ -3,6 +3,24 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Status page
+
+- **The patch history shows versions.** Each patched source package is listed with its
+  version before and after the run, e.g. `openssl 3.5.1-1 → 3.5.4-1`, instead of only
+  its name. Runs already in the history show them too.
+
+### CLI
+
+- **`aptwarden patches` lists versions.** Below each run, its source packages are
+  listed with their old and new version.
+
+### Patching
+
+- **Dependency upgrade notes name the old version as well**, e.g.
+  `dependency upgrade libc6 2.41-12 -> 2.41-12+deb13u4`.
+
 ## 0.8.1 (2026-11-19)
 
 ### Upgrade notes

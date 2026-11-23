@@ -282,7 +282,7 @@ def test_extra_dependency_upgrade_policy(state):
     result, _ = run(state, openssl_host(extra_sim=extra),
                     cfg=host_config({"allow_extra_upgrades": True}))
     assert result.status == "patched"
-    assert "dependency upgrade libc6 -> 2.41-12+deb13u4" in result.notes
+    assert "dependency upgrade libc6 2.41-12 -> 2.41-12+deb13u4" in result.notes
 
 
 def test_allowed_extras_are_passed_to_install(state):

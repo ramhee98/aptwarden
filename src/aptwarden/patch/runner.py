@@ -267,9 +267,9 @@ class PatchRunner:
         result.problems = apt.check_simulation(
             sim, planned, allow_extra_upgrades=policy["allow_extra_upgrades"],
             allow_new_packages=tuple(policy["allow_new_packages"]))
-        for name, (_, new) in sim.upgrades.items():
+        for name, (old, new) in sim.upgrades.items():
             if name not in planned:
-                result.notes.append(f"dependency upgrade {name} -> {new}")
+                result.notes.append(f"dependency upgrade {name} {old} -> {new}")
         if result.problems:
             raise PatchAbort("simulation: " + "; ".join(result.problems))
         # The helper installs only what it is given explicitly, so the extra upgrades and new

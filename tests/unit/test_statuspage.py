@@ -46,7 +46,9 @@ def seed(state: State):
          "alerts": ["tag v2026.10.23 rejected: unsigned"]}]})
     state.save_patch("p1", "web01", "rolled-back", "2026-10-23T02:00:00+00:00", {
         "status": "rolled-back", "started_at": "2026-10-23T02:00:00+00:00",
-        "reason": "healthchecks failed", "items": [{"source_package": "openssl"}],
+        "reason": "healthchecks failed",
+        "items": [{"source_package": "openssl", "installed": "3.5.1-1",
+                   "target_source_version": "3.5.4-1"}],
         "snapshot": {"provider": "proxmox", "target": "pve/lxc/139", "name": "aptw_p1"}})
     state.add_snapshot("proxmox", "pve/lxc/139", "aptw_p1", "web01", "p1")
 
@@ -77,6 +79,8 @@ def test_render(make_config, tmp_path):
     assert "2:2.6-3+deb13u3" in page and "AW-2026-0002 auto-patch" in page
     assert ">KEV<" in page
     assert "rolled-back" in page and "aptw_p1" in page
+    # versions in the history, each kept on one line
+    assert '<span class="pkg">openssl <code>3.5.1-1 → 3.5.4-1</code></span>' in page
     assert "tag v2026.10.23 rejected: unsigned" in page
     assert "reboot required" in page
     assert "https://security-tracker.debian.org/tracker/CVE-2026-24061" in page

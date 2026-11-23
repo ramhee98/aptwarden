@@ -1,7 +1,7 @@
 import json
 
 from aptwarden.models import Finding, FindingStatus, Severity
-from aptwarden.report import group_findings, render_json, render_text
+from aptwarden.report import group_findings, render_json, render_text, version_change
 from aptwarden.sources import SourceStatus
 from aptwarden.state import HostRecord
 
@@ -96,3 +96,13 @@ def test_cve_listing_keeps_columns_aligned():
     col = header.index("FIXED")
     rows = [ln for ln in lines if ln.startswith("  critical") or ln.startswith("  low")]
     assert rows and all(ln[col - 2:col] == "  " and ln[col] != " " for ln in rows)
+
+
+def test_version_change():
+    item = {"source_package": "openssl", "installed": "3.5.1-1",
+            "target_source_version": "3.5.4-1"}
+    assert version_change(item) == ("openssl", "3.5.1-1 -> 3.5.4-1")
+    assert version_change(item, "→") == ("openssl", "3.5.1-1 → 3.5.4-1")
+    # an item stored before its candidate was resolved
+    assert version_change({"source_package": "curl", "installed": "8.14.1-2",
+                                  "target_source_version": None}) == ("curl", "8.14.1-2 -> ?")

@@ -634,3 +634,29 @@ def test_a_skip_does_not_make_an_abort_new(make_config):
     assert [p["run_id"] for p in st.patches("web01")] == ["r4", "r3", "r2", "r1"]
     assert [p["run_id"] for p in st.patches("web01", skipped=False)] == ["r3", "r1"]
     runner.close()
+
+
+def test_patches_lists_versions_below_each_run(make_config, capsys):
+    from types import SimpleNamespace
+
+    from aptwarden import cli
+
+    cfg = cfg_with(make_config)
+    runner = Runner(cfg)
+    items = [{"source_package": "openssl", "installed": "3.5.1-1",
+              "target_source_version": "3.5.4-1"},
+             {"source_package": "curl", "installed": "8.14.1-2",
+              "target_source_version": "8.14.1-2+deb13u1"}]
+    runner.state.save_patch("p1", "web01", "patched", "2026-10-23T02:00:00+00:00", {
+        "host": "web01", "status": "patched", "started_at": "2026-10-23T02:00:00+00:00",
+        "reason": "upgraded 5 packages", "items": items, "snapshot": None})
+    runner.state.save_patch("p2", "web01", "nothing-to-do", "2026-10-24T02:00:00+00:00", {
+        "host": "web01", "status": "nothing-to-do", "started_at": "2026-10-24T02:00:00+00:00",
+        "reason": "", "items": [], "snapshot": None})
+    runner.close()
+    assert cli.cmd_patches(SimpleNamespace(host=None, limit=20), cfg) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].split()[2] == "nothing-to-do"
+    assert lines[2].split()[2] == "patched"
+    assert lines[3:] == ["    openssl 3.5.1-1 -> 3.5.4-1",
+                         "    curl 8.14.1-2 -> 8.14.1-2+deb13u1"]
