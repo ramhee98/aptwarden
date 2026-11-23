@@ -222,9 +222,12 @@ Notes on updating:
   systemctl daemon-reload
   ```
 
-- **The helper on patch targets is not updated automatically.** `hosts check` reports
-  `helper NOT ready: outdated helper` when it is outdated; refresh it with
-  `aptwarden helper show --install`, see
+- **The helper on patch targets is not updated automatically.** Each feature needs a
+  minimum helper version, so a new aptwarden release does not stop patching on hosts
+  with an older helper; only a feature that needs a newer helper is refused there.
+  `hosts check` shows the version and what it lacks, e.g. `helper 3 ok (pin needs 4)`,
+  and `helper NOT ready: outdated helper` when the host uses such a feature. Refresh it
+  with `aptwarden helper show --install`, see
   [Target hosts: helper and sudo](#target-hosts-helper-and-sudo).
 
 ## Configuration
@@ -315,7 +318,7 @@ policy:
   host goes back to `alert`, the next report removes the pins again.
 - **Visible in the report:** the host shows `blocked versions pinned away: xz-utils
   5.6.1-1 (AW-2024-0001)` while pins are active, and `enforce_block: pin failed, …`
-  as a warning if they could not be written (e.g. outdated helper).
+  as a warning if they could not be written (e.g. a helper older than version 4).
 - **Dry runs and `hosts check` change nothing.** For a pin host that does not patch,
   `hosts check` still checks the helper.
 
@@ -446,6 +449,20 @@ in one step. Run it as root on the target. The script:
 
 It is idempotent, so you can run it again after an update to refresh the helper.
 
+**Helper versions:** the installer always writes the newest helper, but aptwarden does
+not require it. Each feature needs a minimum version, and newer helpers are accepted:
+
+| Feature | Helper commands | Needs |
+|---|---|---|
+| patching (`modes: [patch]` or `dry-run`) | `update`, `simulate`, `install`, `needrestart`, `reboot` | 3 or newer |
+| [`enforce_block: pin`](#pinning-blocked-versions-away-enforce_block-pin) | `pin` | 4 or newer |
+
+A host with an older helper keeps working for everything its version supports. Only a
+feature it is too old for is refused, with a message that names the feature and the
+version it needs (`outdated helper (aptwarden-helper 3; enforce_block: pin needs version
+4 or newer)`). `hosts check` shows what the installed helper can do, e.g. `helper 3 ok
+(pin needs 4)`, so you can update hosts when it suits you.
+
 ```sh
 # via SSH as root
 aptwarden helper show --install | ssh root@TARGET sh
@@ -457,7 +474,7 @@ The user `aptwarden` with the central host's key must exist first (see
 [Target hosts](#target-hosts)). Check from the central host afterwards:
 
 ```sh
-runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helper ok"
+runuser -u aptwarden -- aptwarden hosts check --host TARGET      # expect "helper 4 ok"
 ```
 
 With `policy.restart: auto` (the default), install `needrestart` too, so that services

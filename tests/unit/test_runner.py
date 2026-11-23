@@ -320,3 +320,27 @@ def test_hosts_check_names_the_time_zone(make_config, monkeypatch):
     # tests/conftest.py sets TZ=Asia/Kolkata
     assert any(n.endswith("(server local time, Asia/Kolkata)") for n in server), server
     assert any(n.endswith("(America/New_York)") for n in ny), ny
+
+
+@pytest.mark.parametrize("modes, enforce, version, expected", [
+    (["patch"], "alert", "4", "helper 4 ok"),
+    # patching needs 3: ready, and the note says what the helper cannot do yet
+    (["patch"], "alert", "3", "helper 3 ok (pin needs 4)"),
+    (["dry-run"], "alert", "3", "helper 3 ok (pin needs 4)"),
+    (["patch"], "pin", "3", "helper NOT ready: outdated helper (aptwarden-helper 3; "
+                            "enforce_block: pin needs version 4 or newer): update it to version"),
+    (["report"], "pin", "3", "helper NOT ready: outdated helper (aptwarden-helper 3; "
+                             "enforce_block: pin needs version 4 or newer)"),
+    (["patch"], "alert", "2", "helper NOT ready: outdated helper (aptwarden-helper 2; "
+                              "patching needs version 3 or newer)"),
+    (["patch"], "pin", "7", "helper 7 ok"),
+])
+def test_hosts_check_helper_note(make_config, modes, enforce, version, expected):
+    cfg = make_config(hosts=[{"name": "web01",
+                              "policy": {"modes": modes, "enforce_block": enforce}}])
+    h = cfg.hosts[0]
+    t = FakeTransport("web01", {("sudo", "-n", h.ssh.helper, "version"):
+                                (0, f"aptwarden-helper {version}\n", "")})
+    note = cli._helper_note(t, h)
+    assert note.startswith(expected), note
+    assert "see README" not in note

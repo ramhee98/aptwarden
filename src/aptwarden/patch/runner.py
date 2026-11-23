@@ -33,7 +33,14 @@ from aptwarden.transport import Transport, TransportError
 
 log = logging.getLogger(__name__)
 
-HELPER_VERSION = "4"
+# The version `aptwarden helper show` installs. Hosts may run an older one: each
+# feature only needs the version that introduced what it relies on (HELPER_FEATURES),
+# so raising this does not force every host to update at once. Newer is accepted.
+HELPER_VERSION = 4
+# feature -> minimum helper version. patch: v2 binds install to its own simulation,
+# v3 fixes the needrestart restart. pin: v4 adds the pin command.
+HELPER_FEATURES = {"patch": 3, "pin": 4}
+_FEATURE_NAMES = {"patch": "patching", "pin": "enforce_block: pin"}
 # The helper's exit status when it refuses a call. It only exits so before running apt, so
 # nothing on the host changed.
 HELPER_REFUSED = 2
@@ -52,16 +59,32 @@ CHANGED_STATUSES = frozenset({"patched", "rolled-back", "needs-manual-rollback",
 HELPER_HINT = "see README: Target hosts: helper and sudo"
 
 
-def explain_helper_failure(r, helper: str) -> str | None:
-    """None if ``sudo -n <helper> version`` worked, else what is wrong."""
+def helper_version(out: str) -> int | None:
+    """The version in the helper's ``version`` output, None if it is not one."""
+    prefix, _, number = out.strip().partition(" ")
+    if prefix == "aptwarden-helper" and number.isascii() and number.isdigit():
+        return int(number)
+    return None
+
+
+def missing_helper_features(version: int) -> dict[str, int]:
+    """{feature: minimum version} for the features this helper version lacks."""
+    return {f: need for f, need in HELPER_FEATURES.items() if version < need}
+
+
+def explain_helper_failure(r, helper: str, feature: str = "patch") -> str | None:
+    """None if ``sudo -n <helper> version`` worked and the helper is recent enough
+    for ``feature`` (a key of HELPER_FEATURES), else what is wrong."""
     out = r.stdout.strip()
-    if out == f"aptwarden-helper {HELPER_VERSION}":
+    need = HELPER_FEATURES[feature]
+    version = helper_version(out)
+    if version is not None and version >= need:
         return None
     raw = (r.stderr or r.stdout).strip()
     if out.startswith("aptwarden-helper "):
-        reason = (f"outdated helper ({out}, expected version {HELPER_VERSION}): reinstall it "
-                  f"from 'aptwarden helper show'")
-    elif "'sudo': No such file" in raw or "‘sudo’: No such file" in raw or (
+        return (f"outdated helper ({out}; {_FEATURE_NAMES[feature]} needs version {need} "
+                f"or newer): update it to version {HELPER_VERSION}; {HELPER_HINT}")
+    if "'sudo': No such file" in raw or "‘sudo’: No such file" in raw or (
             "sudo" in raw and "not found" in raw and helper not in raw):
         reason = "sudo is not installed on the host"
     elif helper in raw and ("not found" in raw or "No such file" in raw):
@@ -226,7 +249,7 @@ class PatchRunner:
 
         result.stage = "preflight"
         r = self._helper(t, host, "version", timeout=30)
-        if problem := explain_helper_failure(r, host.ssh.helper):
+        if problem := explain_helper_failure(r, host.ssh.helper, "patch"):
             raise PatchAbort(problem)
         if not result.dry_run and not host.healthchecks:
             raise PatchAbort("no healthchecks configured; auto-patching requires them")

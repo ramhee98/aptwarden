@@ -202,12 +202,25 @@ def cmd_status(args, cfg: config.Config) -> int:
 
 
 def _helper_note(t, h: config.HostConfig) -> str:
-    from aptwarden.patch.runner import explain_helper_failure
+    """Whether the helper can do what this host uses, and what it cannot do."""
+    from aptwarden.patch.runner import (
+        explain_helper_failure,
+        helper_version,
+        missing_helper_features,
+    )
 
     r = t.run(["sudo", "-n", h.ssh.helper, "version"], timeout=30)
-    problem = explain_helper_failure(r, h.ssh.helper)
-    return "helper NOT ready: " + problem.rsplit("; see README", 1)[0] if problem \
-        else "helper ok"
+    needed = [f for f, used in (
+        ("patch", bool({"patch", "dry-run"} & set(h.policy["modes"]))),
+        ("pin", h.policy.get("enforce_block") == "pin")) if used] or ["patch"]
+    for feature in needed:
+        if problem := explain_helper_failure(r, h.ssh.helper, feature):
+            return "helper NOT ready: " + problem.rsplit("; see README", 1)[0]
+    version = helper_version(r.stdout)
+    missing = missing_helper_features(version)
+    return f"helper {version} ok" + (
+        " (" + ", ".join(f"{f} needs {n}" for f, n in missing.items()) + ")"
+        if missing else "")
 
 
 def _helper_readiness(h: config.HostConfig) -> list[str]:

@@ -3,6 +3,25 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased (0.9.1)
+
+### Upgrade notes
+
+- **Patch hosts no longer need the newest helper.** Only hosts with `enforce_block: pin`
+  need helper version 4; patching works with helper 3 again. This corrects the 0.9.0
+  upgrade note: hosts that patch but do not pin need no reinstall.
+
+### Patching
+
+- **A minimum helper version per feature instead of the exact version.** Patching needs
+  helper 3 or newer, `enforce_block: pin` needs 4 or newer, and helpers newer than this
+  aptwarden knows are accepted. Raising the helper version for a new feature therefore
+  no longer stops patching on every host until it is reinstalled. A helper that is too
+  old for a feature is refused with the feature and the version it needs, e.g.
+  `outdated helper (aptwarden-helper 3; enforce_block: pin needs version 4 or newer)`.
+- **`hosts check` shows what the helper can do,** e.g. `helper 3 ok (pin needs 4)`, and
+  `helper NOT ready` only when the host uses a feature the helper is too old for.
+
 ## 0.9.0 (2026-11-23)
 
 ### Upgrade notes

@@ -134,7 +134,14 @@ def test_enforce_reports_helper_problems():
     [note] = result.notes()
     assert note.startswith(
         "enforce_block: pin failed, blocked versions are NOT pinned away: outdated helper "
-        f"(aptwarden-helper 3, expected version {HELPER_VERSION})")
+        "(aptwarden-helper 3; enforce_block: pin needs version 4 or newer)")
+    t = transport(helper="aptwarden-helper 3\n")
+    run(t)
+    assert sudo_calls(t) == [["version"]]  # pin was not called
+
+    # a newer helper than this aptwarden knows pins too
+    t = transport(helper="aptwarden-helper 99\n")
+    assert run(t).changed and sudo_calls(t)[-1] == ["pin", *WANTED]
 
     result = run(transport(pin_rc=2))
     assert result.error == "helper pin exited 2: aptwarden-helper: boom"

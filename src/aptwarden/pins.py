@@ -125,7 +125,7 @@ def enforce(t: Transport, host: HostConfig, inv: HostInventory,
         if set(result.pins) == current and (current_file.ok or not result.pins):
             return result
         r = t.run(["sudo", "-n", host.ssh.helper, "version"], timeout=30)
-        if problem := explain_helper_failure(r, host.ssh.helper):
+        if problem := explain_helper_failure(r, host.ssh.helper, "pin"):
             result.error = problem
             return result
         r = t.run(["sudo", "-n", host.ssh.helper, "pin",

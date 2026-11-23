@@ -25,6 +25,7 @@ class Host:
     healthy: bool = True
     healthy_after_install: bool = True
     helper_ok: bool = True
+    helper_version: int = HELPER_VERSION
     install_fails: bool = False
     install_refused: bool = False
     extra_sim: str = ""
@@ -55,7 +56,7 @@ class ScriptedTransport(Transport):
             if not h.helper_ok:
                 return ok(rc=1, err="sudo: a password is required")
             if cmd == "version":
-                return ok(f"aptwarden-helper {HELPER_VERSION}\n")
+                return ok(f"aptwarden-helper {h.helper_version}\n")
             if cmd == "update":
                 return ok()
             if cmd == "simulate":
@@ -525,24 +526,70 @@ def test_manual_rollback(state):
 
 
 # real messages captured from a Debian 13 host
-@pytest.mark.parametrize("stdout, stderr, expected", [
-    (f"aptwarden-helper {HELPER_VERSION}\n", "", None),
-    ("aptwarden-helper 2\n", "", f"outdated helper (aptwarden-helper 2, expected version {HELPER_VERSION})"),
-    ("", "env: ‘sudo’: No such file or directory", "sudo is not installed"),
-    ("", "sudo: a password is required", "no sudo rule for the helper"),
-    ("", f"sudo: {HELPER}: command not found", "the helper is not installed at"),
-    ("aptwarden-helper 0\n", "", "outdated helper (aptwarden-helper 0"),
-    ("", "ssh_exchange_identification: boom", "helper not usable via sudo (ssh_"),
+@pytest.mark.parametrize("stdout, stderr, feature, expected", [
+    (f"aptwarden-helper {HELPER_VERSION}\n", "", "patch", None),
+    (f"aptwarden-helper {HELPER_VERSION}\n", "", "pin", None),
+    # a minimum per feature, not the exact version: older hosts keep patching
+    ("aptwarden-helper 3\n", "", "patch", None),
+    ("aptwarden-helper 3\n", "", "pin",
+     "outdated helper (aptwarden-helper 3; enforce_block: pin needs version 4 or newer): "
+     f"update it to version {HELPER_VERSION}; see README"),
+    ("aptwarden-helper 2\n", "", "patch",
+     "outdated helper (aptwarden-helper 2; patching needs version 3 or newer)"),
+    # a newer helper than this aptwarden knows is fine
+    ("aptwarden-helper 99\n", "", "patch", None),
+    ("aptwarden-helper 99\n", "", "pin", None),
+    ("aptwarden-helper x\n", "", "patch", "outdated helper (aptwarden-helper x;"),
+    ("", "env: ‘sudo’: No such file or directory", "patch", "sudo is not installed"),
+    ("", "sudo: a password is required", "pin", "no sudo rule for the helper"),
+    ("", f"sudo: {HELPER}: command not found", "patch", "the helper is not installed at"),
+    ("aptwarden-helper 0\n", "", "patch", "outdated helper (aptwarden-helper 0"),
+    ("", "ssh_exchange_identification: boom", "patch", "helper not usable via sudo (ssh_"),
 ])
-def test_explain_helper_failure(stdout, stderr, expected):
+def test_explain_helper_failure(stdout, stderr, feature, expected):
     from aptwarden.patch.runner import explain_helper_failure
 
     r = CommandResult(["sudo"], 0 if stdout else 1, stdout, stderr)
-    msg = explain_helper_failure(r, HELPER)
+    msg = explain_helper_failure(r, HELPER, feature)
     if expected is None:
         assert msg is None
     else:
         assert expected in msg and "see README" in msg
+
+
+def test_helper_version_and_missing_features():
+    from aptwarden.patch.runner import (
+        HELPER_FEATURES,
+        helper_version,
+        missing_helper_features,
+    )
+
+    assert helper_version("aptwarden-helper 3\n") == 3
+    assert helper_version("aptwarden-helper 12") == 12
+    for bad in ("aptwarden-helper", "aptwarden-helper 3a", "aptwarden-helper ³", "helper 3",
+                "aptwarden-helper -1", ""):
+        assert helper_version(bad) is None, bad
+    assert missing_helper_features(3) == {"pin": 4}
+    assert missing_helper_features(2) == {"patch": 3, "pin": 4}
+    assert missing_helper_features(HELPER_VERSION) == {}
+    # the newest helper supports everything
+    assert max(HELPER_FEATURES.values()) <= HELPER_VERSION
+
+
+def test_patches_with_helper_3(state):
+    """Patching needs helper 3, not the newest: a host that has not updated yet for an
+    unrelated feature (pin) keeps being patched."""
+    h = openssl_host()
+    h.helper_version = 3
+    result, _ = run(state, h)
+    assert result.status == "patched", result.reason
+
+    h = openssl_host()
+    h.helper_version = 2
+    result, _ = run(state, h)
+    assert result.status == "aborted" and result.stage == "preflight"
+    assert "patching needs version 3 or newer" in result.reason
+    assert not any(c[3] in ("update", "install") for c in h.calls if c[0] == "sudo")
 
 
 def test_no_newer_candidate_explains_versions(state):
