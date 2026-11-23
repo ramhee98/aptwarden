@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import re
 import shlex
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from aptwarden.models import HostInventory, Package
 from aptwarden.transport import Transport, TransportError
@@ -47,6 +49,11 @@ uu=$(apt-config shell V APT::Periodic::Unattended-Upgrade 2>/dev/null)
 eval "$uu"
 echo "unattended_upgrade_periodic=${V:-0}"
 """
+
+
+# Ubuntu's release dates, shipped on every Ubuntu host (distro-info-data).
+DISTRO_INFO = "/usr/share/distro-info/ubuntu.csv"
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 class InventoryError(Exception):
@@ -126,6 +133,39 @@ def parse_apt_suites(text: str, distro: str = "debian") -> list[str]:
     return sorted(suites)
 
 
+def parse_distro_info(text: str, codename: str) -> dict[str, str]:
+    """End of standard support (``support_end``, the server date for LTS releases)
+    and of Ubuntu Pro's ESM (``esm_end``) for a release, from distro-info's CSV.
+    Older files lack newer releases: then nothing is known."""
+    try:
+        for row in csv.DictReader(io.StringIO(text)):
+            row = {(k or "").lower(): (v or "") for k, v in row.items()}
+            if row.get("series") != codename:
+                continue
+            facts = {}
+            support_end = row.get("eol-server") or row.get("eol", "")
+            if _DATE.fullmatch(support_end):
+                facts["support_end"] = support_end
+            if _DATE.fullmatch(row.get("eol-esm", "")):
+                facts["esm_end"] = row["eol-esm"]
+            return facts
+    except csv.Error:
+        pass
+    return {}
+
+
+def support_note(inv: HostInventory, today: date | None = None) -> str | None:
+    """A warning once the host's release is past its standard support."""
+    end, esm = inv.facts.get("support_end"), inv.facts.get("esm_end")
+    today_s = (today or datetime.now(UTC).date()).isoformat()
+    if not end or today_s <= end:
+        return None
+    if esm and today_s <= esm:
+        return (f"{inv.release_label()} is out of standard support since {end}: security "
+                f"fixes only through Ubuntu Pro (ESM until {esm})")
+    return f"{inv.release_label()} is out of support since {esm or end}: no security fixes"
+
+
 def detect_distro(os_release: dict[str, str]) -> str:
     """``debian`` or ``ubuntu``. Debian derivatives (``ID_LIKE=debian``) count as
     Debian, as before. Ubuntu derivatives (Mint, Pop!_OS, ...) are refused: their
@@ -174,6 +214,10 @@ def collect(transport: Transport) -> HostInventory:
         # no suites at all means apt could not tell (e.g. too old): then nothing is checked
         if suites:
             facts["apt_suites"] = " ".join(suites)
+        if distro == "ubuntu":
+            info = transport.run(["cat", DISTRO_INFO])
+            if info.ok:
+                facts.update(parse_distro_info(info.stdout, os_release.get("VERSION_CODENAME", "")))
     except TransportError as e:
         raise InventoryError(str(e)) from e
 

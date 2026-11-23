@@ -6,12 +6,16 @@ from aptwarden.inventory import (
     collect,
     detect_distro,
     parse_apt_suites,
+    parse_distro_info,
     parse_dpkg_query,
     parse_facts,
     parse_os_release,
+    support_note,
 )
+from aptwarden.models import HostInventory
 from aptwarden.transport import TransportError
 from tests.conftest import (
+    UBUNTU_CSV,
     FakeTransport,
     debian_host_commands,
     fixture_text,
@@ -168,6 +172,7 @@ def test_collect_ubuntu(release, version, suites):
     assert inv.release_label() == f"Ubuntu {version} ({release})"
     assert inv.apt_suites() == suites
     assert inv.summary()["distro"] == "ubuntu"
+    assert inv.facts["support_end"] > "2029" and inv.facts["esm_end"] > "2034"
 
 
 def test_parse_apt_suites_ubuntu():
@@ -198,3 +203,36 @@ def test_detect_distro(os_release, expected):
     else:
         with pytest.raises(InventoryError, match=expected):
             detect_distro(os_release)
+
+
+def test_parse_distro_info():
+    assert parse_distro_info(UBUNTU_CSV, "focal") == {"support_end": "2025-05-29",
+                                                      "esm_end": "2030-04-23"}
+    assert parse_distro_info(UBUNTU_CSV, "questing") == {"support_end": "2026-07-09"}
+    old = "Version,codename,series,created,release,eol,eol-server,eol-esm\n" \
+          "24.04 LTS,Noble Numbat,noble,2023-10-12,2024-04-25,2029-05-31,2029-05-31,2034-04-25\n"
+    assert parse_distro_info(old, "noble")["esm_end"] == "2034-04-25"
+    assert parse_distro_info(old, "resolute") == {}  # older file: release unknown
+    assert parse_distro_info("series,eol\nnoble,soon\x1b[2J\n", "noble") == {}
+
+
+@pytest.mark.parametrize("codename, today, expected", [
+    ("noble", "2026-11-23", None),
+    ("focal", "2025-05-29", None),  # the last day of support
+    ("focal", "2026-11-23", "Ubuntu 20.04 LTS (focal) is out of standard support since "
+                            "2025-05-29: security fixes only through Ubuntu Pro (ESM until "
+                            "2030-04-23)"),
+    ("focal", "2031-01-01", "Ubuntu 20.04 LTS (focal) is out of support since 2030-04-23: "
+                            "no security fixes"),
+    ("questing", "2026-11-23", "Ubuntu 25.10 (questing) is out of support since 2026-07-09: "
+                               "no security fixes"),
+    ("unknown", "2040-01-01", None),
+])
+def test_support_note(codename, today, expected):
+    from datetime import date
+
+    version = {"focal": "20.04 LTS", "noble": "24.04 LTS", "questing": "25.10"}.get(codename, "?")
+    inv = HostInventory("h", "ubuntu", "", codename, "", "amd64", [],
+                        facts=parse_distro_info(UBUNTU_CSV, codename), distro="ubuntu",
+                        os_version=version)
+    assert support_note(inv, date.fromisoformat(today)) == expected

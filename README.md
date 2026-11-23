@@ -88,8 +88,8 @@ sources; an alias like `stable-security` there is not resolved to the codename.
   and `github.com` (custom definitions, installation, updates). It also needs SSH to
   every target and, for patching, the Proxmox API (port 8006).
 - **Target hosts:** Debian (or a Debian derivative with `VERSION_CODENAME`) reachable over
-  SSH. Ubuntu LTS hosts are reported through OSV (keep the `osv` source enabled);
-  patching them and Ubuntu Pro fixes are not supported yet. Ubuntu derivatives fail.
+  SSH. Ubuntu hosts are reported through OSV, including Ubuntu Pro fixes (keep the
+  `osv` source enabled); patching them is not supported yet. Ubuntu derivatives fail.
   HTTP and TCP healthchecks run from the central host unless `on_host` is set, see
   [Healthchecks](#healthchecks-from-the-central-host-or-on-the-host).
 

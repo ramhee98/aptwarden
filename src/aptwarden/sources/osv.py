@@ -17,7 +17,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from aptwarden import debversion
 from aptwarden.http import HttpError
@@ -54,15 +54,50 @@ CREATE TABLE IF NOT EXISTS osv_vulns (
 Query = tuple[str, str, str]  # (ecosystem, package, version)
 
 
+def _ubuntu_lts(inv: HostInventory) -> bool | None:
+    """Whether an Ubuntu host runs an LTS release; None if not Ubuntu or the version
+    is unknown. LTS releases come every two years in April; os-release does not say
+    so reliably (26.04 has "LTS" only in PRETTY_NAME)."""
+    if inv.distro != "ubuntu" or not (m := _UBUNTU_VERSION.fullmatch(inv.os_version_id)):
+        return None
+    return m.group(2) == "04" and int(m.group(1)) % 2 == 0
+
+
 def ecosystem(inv: HostInventory) -> str | None:
     if inv.os_id == "debian" and inv.os_version_id:
         return f"Debian:{inv.os_version_id}"
-    if inv.distro == "ubuntu" and (m := _UBUNTU_VERSION.fullmatch(inv.os_version_id)):
-        # LTS releases come every two years in April; os-release does not say so
-        # reliably (26.04 has "LTS" only in PRETTY_NAME)
-        lts = m.group(2) == "04" and int(m.group(1)) % 2 == 0
+    lts = _ubuntu_lts(inv)
+    if lts is not None:
         return f"Ubuntu:{inv.os_version_id}" + (":LTS" if lts else "")
     return None
+
+
+def pro_ecosystem(inv: HostInventory) -> str | None:
+    """Ubuntu Pro (ESM) of an LTS release. Not an addition to ``ecosystem``: it
+    covers other packages (universe in esm-apps, e.g. 7zip on 24.04) and, after the
+    end of standard support, the fixes of the release itself (esm-infra)."""
+    return f"Ubuntu:Pro:{inv.os_version_id}:LTS" if _ubuntu_lts(inv) else None
+
+
+def _pro_kind(record: dict, eco: str, package: str) -> str | None:
+    """``apps`` or ``infra``, from the entry's purl (``distro=esm-apps/noble``)."""
+    for affected in record.get("affected", []):
+        pkg = affected.get("package", {})
+        if pkg.get("ecosystem") == eco and pkg.get("name") == package:
+            distro = parse_qs(urlsplit(pkg.get("purl") or "").query).get("distro", [""])[0]
+            kind = distro.partition("/")[0].removeprefix("esm-")
+            if kind in ("apps", "infra"):
+                return kind
+    return None
+
+
+def pro_missing_source(inv: HostInventory, kind: str | None) -> str | None:
+    """The Ubuntu Pro pocket a fix needs, unless the host's apt sources have it."""
+    suites = inv.apt_suites() or set()
+    kinds = [kind] if kind else ["apps", "infra"]
+    if any(f"{inv.codename}-{k}-{p}" in suites for k in kinds for p in ("security", "updates")):
+        return None
+    return f"{inv.codename}-{kind}-security (Ubuntu Pro)" if kind else "Ubuntu Pro"
 
 
 def normalize_id(osv_id: str) -> str:
@@ -77,15 +112,18 @@ def normalize_id(osv_id: str) -> str:
 def evaluate_ranges(record: dict, eco: str, package: str, version: str):
     """Return (affected, fixed_version) for one package version.
 
-    Uses the ECOSYSTEM ranges of the record with Debian version semantics. A
-    record without ranges for the package (versions list only) is treated as
-    affected without a known fix.
+    Uses the ECOSYSTEM ranges of the record with Debian version semantics. An
+    entry for the package without ranges (versions list only) is treated as
+    affected without a known fix. A record without any entry for the ecosystem and
+    package does not affect it: OSV matches ecosystems loosely (a query for
+    ``Ubuntu:26.04`` also returns ``Ubuntu:26.04:LTS`` records).
     """
-    saw_range = False
+    saw_entry = saw_range = False
     for affected in record.get("affected", []):
         pkg = affected.get("package", {})
         if pkg.get("ecosystem") != eco or pkg.get("name") != package:
             continue
+        saw_entry = True
         for rng in affected.get("ranges", []):
             if rng.get("type") != "ECOSYSTEM":
                 continue
@@ -105,7 +143,7 @@ def evaluate_ranges(record: dict, eco: str, package: str, version: str):
                     introduced = None
             if introduced is not None and debversion.in_range(version, introduced):
                 return True, None
-    return (not saw_range), None
+    return (saw_entry and not saw_range), None
 
 
 def _urgency(record: dict, eco: str, package: str) -> str | None:
@@ -159,8 +197,9 @@ class OsvSource(Source):
                     "no OSV ecosystem for this host (needs Debian or Ubuntu with VERSION_ID)"
                 )
                 continue
-            for source, version in inv.source_packages():
-                wanted[(eco, source, version)] = None
+            for e in filter(None, (eco, pro_ecosystem(inv))):
+                for source, version in inv.source_packages():
+                    wanted[(e, source, version)] = None
         try:
             results = self._querybatch(list(wanted))
             records = self._hydrate({vid: mod for ids in results.values() for vid, mod in ids})
@@ -170,7 +209,8 @@ class OsvSource(Source):
             log.warning("osv query failed", extra={"error": str(e)})
             return {}
 
-        per_query: dict[Query, list[Finding]] = {}
+        # findings per query, with the Ubuntu Pro kind (apps, infra) for Pro queries
+        per_query: dict[Query, list[tuple[Finding, str | None]]] = {}
         for query, ids in results.items():
             findings, notices = [], []
             for vid, _ in ids:
@@ -190,15 +230,20 @@ class OsvSource(Source):
                 if (f := self._finding(query, vid, record, cves)) is not None:
                     findings.append(f)
             if findings:
-                per_query[query] = findings
+                eco, package, _ = query
+                records_by_id = {normalize_id(v): records[v] for v, _ in ids if v in records}
+                per_query[query] = [
+                    (f, _pro_kind(records_by_id[f.vuln_id], eco, package)
+                     if eco.startswith("Ubuntu:Pro:") else None) for f in findings]
 
         out: dict[str, list[Finding]] = {}
         for inv in inventories:
-            eco = ecosystem(inv)
+            eco, pro = ecosystem(inv), pro_ecosystem(inv)
             findings = []
             for (source, version), binaries in inv.source_packages().items():
-                for f in per_query.get((eco, source, version), []):
-                    findings.append(_with_binaries(f, binaries))
+                merged = _merge_pro(inv, per_query.get((eco, source, version), []),
+                                    per_query.get((pro, source, version), []) if pro else [])
+                findings += [_with_binaries(f, binaries) for f in merged]
             out[inv.host] = findings
         return out
 
@@ -299,6 +344,29 @@ def _query_body(query: Query, page_token: str | None = None) -> dict:
     if page_token:
         body["page_token"] = page_token
     return body
+
+
+def _merge_pro(inv: HostInventory, standard: list[tuple[Finding, str | None]],
+               pro: list[tuple[Finding, str | None]]) -> list[Finding]:
+    """The release's own findings, plus what Ubuntu Pro knows beyond them: its
+    vulnerabilities of packages the release does not track, and its fixes for
+    vulnerabilities the release leaves open. A Pro fix keeps the status fixable and
+    names the Pro pocket as missing source unless the host's apt sources have it."""
+    by_id = {f.vuln_id: f for f, _ in standard}
+    known = set(by_id) | {a for f in by_id.values() for a in f.aliases}
+    extra = []
+    for f, kind in pro:
+        if f.vuln_id in by_id:
+            if by_id[f.vuln_id].status == FindingStatus.FIXABLE \
+                    or f.status != FindingStatus.FIXABLE:
+                continue
+            del by_id[f.vuln_id]  # open in the release, fixed in Pro
+        elif f.vuln_id.startswith(_FALLBACK_PREFIXES) and known & set(f.aliases):
+            continue  # a Pro notice for CVEs the release's records already cover
+        if f.status == FindingStatus.FIXABLE:
+            f = replace(f, missing_source=pro_missing_source(inv, kind))
+        extra.append(f)
+    return list(by_id.values()) + extra
 
 
 def _with_binaries(f: Finding, binaries: list[str]) -> Finding:

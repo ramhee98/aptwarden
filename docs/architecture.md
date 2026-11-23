@@ -94,8 +94,17 @@ For Ubuntu hosts OSV is the only source so far. Canonical publishes `UBUNTU-CVE-
 records in the ecosystems `Ubuntu:<version>:LTS` (April releases of even years) and
 `Ubuntu:<version>`, one entry per release and source package. A fixed event means the
 fix is released to the release's `-security`/`-updates` pockets, so the finding is
-`fixable`; an entry without one is `no-fix`. Ubuntu Pro fixes live in separate
-ecosystems (`Ubuntu:Pro:24.04:LTS`) and are not queried yet. Security notices (`USN-*`)
+`fixable`; an entry without one is `no-fix`. For LTS releases aptwarden also queries
+the Ubuntu Pro ecosystem (`Ubuntu:Pro:24.04:LTS`). It covers other packages than the
+release's ecosystem: universe packages in esm-apps, and after the end of standard
+support the release's own fixes in esm-infra. Pro findings are added where the
+release's data has none, or replace an open finding with a Pro fix; a Pro fix keeps
+`fixable` and gets `missing_source` `<codename>-apps-security (Ubuntu Pro)` (the
+pocket comes from the entry's purl) unless the host's suites include it. Since OSV is
+the only source for Ubuntu, a failed OSV query fails Ubuntu hosts instead of leaving
+them with 0 findings. Canonical's bulk files were measured and not used: the OSV
+archive is 12.6 GB uncompressed (152 s to parse daily, same data as the API), the VEX
+archive 29.9 GB. Security notices (`USN-*`)
 bundle the CVEs of every release they cover and are skipped, except where no CVE
 record of the package covers any of their CVEs: some fixes have no CVE at all (e.g.
 USN-8945-1, xz-utils). Regression notices (summary `<package> regression`) are always

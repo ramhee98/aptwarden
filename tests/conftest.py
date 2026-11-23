@@ -108,6 +108,13 @@ def debian_host_commands(dpkg_output: str | None = None,
 
 
 NOBLE_SUITES = ("noble", "noble-updates", "noble-security")
+# distro-info-data 0.68 (Ubuntu 26.04); 0.60 (24.04) has "Version" and no eol-legacy
+UBUNTU_CSV = """version,codename,series,created,release,eol,eol-server,eol-esm,eol-legacy
+20.04 LTS,Focal Fossa,focal,2019-10-17,2020-04-23,2025-05-29,2025-05-29,2030-04-23,2032-04-27
+24.04 LTS,Noble Numbat,noble,2023-10-12,2024-04-25,2029-05-31,2029-05-31,2034-04-25,2036-04-29
+25.10,Questing Quokka,questing,2025-04-17,2025-10-09,2026-07-09
+26.04 LTS,Resolute Raccoon,resolute,2025-10-09,2026-04-23,2031-05-29,2031-05-29,2036-04-23,2038-04-27
+"""
 
 
 def ubuntu_host_commands(release: str = "noble", suites=NOBLE_SUITES) -> dict:
@@ -117,6 +124,7 @@ def ubuntu_host_commands(release: str = "noble", suites=NOBLE_SUITES) -> dict:
 
     cmds = debian_host_commands(os_release=fixture_text(f"os-release-{release}.txt"))
     cmds[("cat", "/etc/debian_version")] = (0, "trixie/sid\n", "")
+    cmds[("cat", "/usr/share/distro-info/ubuntu.csv")] = (0, UBUNTU_CSV, "")
     cmds[("apt-get", "indextargets", f"--format={APT_TARGETS_FORMAT}")] = (
         0, "".join(f"deb|{ident}|{release}|{s}\n" for s in suites
                    for ident in ("Packages", "Translations")), "")

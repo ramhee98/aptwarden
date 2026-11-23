@@ -291,6 +291,7 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
 
 
 def cmd_hosts_check(args, cfg: config.Config) -> int:
+    from aptwarden import inventory
     from aptwarden.runner import Runner
 
     hosts = cfg.select_hosts(args.host)
@@ -332,6 +333,8 @@ def cmd_hosts_check(args, cfg: config.Config) -> int:
                 notes.append("tracker cache empty, run 'aptwarden sources refresh'")
         if not covered[h.name]:
             notes.append("no vulnerability source covers this release")
+        if note := inventory.support_note(r):
+            notes.append(note)
         for key in ("needrestart_installed", "reboot_required"):
             if r.facts.get(key) == "yes":
                 notes.append(key.replace("_", " "))

@@ -129,6 +129,58 @@ def test_report_fails_hosts_no_source_covers(setup):
     runner.close()
 
 
+def test_report_fails_ubuntu_hosts_when_osv_fails(setup, make_config):
+    # OSV is the only source for Ubuntu: a failed query must not leave them looking clean
+    _, http, factory = setup
+    cfg = make_config(hosts=[{"name": "web01", "address": "192.0.2.10"},
+                             {"name": "db01", "address": "192.0.2.20"}],
+                      sources={"osv": {"enabled": True, "url": OSV}},
+                      enrich={"cvss": {"enabled": False}})
+    http.routes[("POST", f"{OSV}/v1/querybatch")] = Response(503)
+    factory.transports["db01"] = FakeTransport("db01", ubuntu_host_commands())
+    runner = Runner(cfg, http=http, transports=factory)
+    run = runner.report(cfg.hosts)
+    web, db = run.hosts
+    assert web.ok and web.findings  # the Debian tracker still covers it
+    assert not db.ok
+    assert db.error.startswith("no vulnerability data for Ubuntu 24.04 LTS (noble): osv: "
+                               "query failed")
+    assert run.status == "partial"
+    runner.close()
+
+
+def test_report_keeps_ubuntu_pro_markers(setup, make_config):
+    # the Debian tracker's missing-source check must not touch Ubuntu hosts
+    _, http, factory = setup
+    cfg = make_config(hosts=[{"name": "web01", "address": "192.0.2.10"},
+                             {"name": "db01", "address": "192.0.2.20"}],
+                      sources={"osv": {"enabled": True, "url": OSV}},
+                      enrich={"cvss": {"enabled": False}})
+    pro = "Ubuntu:Pro:24.04:LTS"
+    record = {"id": "UBUNTU-CVE-2026-50", "modified": "2026-01-01T00:00:00Z",
+              "affected": [{"package": {"name": "openssl", "ecosystem": pro,
+                                        "purl": "pkg:deb/ubuntu/openssl?distro=esm-apps%2Fnoble"},
+                            "ranges": [{"type": "ECOSYSTEM", "events": [
+                                {"introduced": "0"}, {"fixed": "3.5.1-1+deb13u1+esm1"}]}]}]}
+
+    def route(headers, data):
+        return json_response({"results": [
+            {"vulns": [{"id": record["id"], "modified": record["modified"]}]}
+            if q["package"] == {"ecosystem": pro, "name": "openssl"} else {}
+            for q in json.loads(data)["queries"]]})
+
+    http.routes[("POST", f"{OSV}/v1/querybatch")] = route
+    http.routes[("GET", f"{OSV}/v1/vulns/UBUNTU-CVE-2026-50")] = json_response(record)
+    factory.transports["db01"] = FakeTransport("db01", ubuntu_host_commands())
+    runner = Runner(cfg, http=http, transports=factory)
+    _, db = runner.report(cfg.hosts).hosts
+    [f] = [f for f in db.findings if f.vuln_id == "CVE-2026-50"]
+    assert f.missing_source == "noble-apps-security (Ubuntu Pro)"
+    assert any(w.startswith("apt sources lack noble-apps-security (Ubuntu Pro): 1 fixable")
+               for w in db.warnings)
+    runner.close()
+
+
 def test_osv_covers_ubuntu_only_online(setup):
     # OSV covers hosts with an ecosystem, but not in offline runs
     cfg, http, factory = setup

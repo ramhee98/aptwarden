@@ -12,8 +12,22 @@ commits.
   releases of even years). `UBUNTU-CVE-*` ids are reported as `CVE-*`. A fix in a
   record is published, so the finding is `fixable`; without a fix it is `no-fix`.
   Tested on Ubuntu 24.04 and 26.04: every fixable finding had an apt candidate that
-  reaches the fix. Ubuntu Pro (ESM) fixes are not reported yet, and patching Ubuntu
-  hosts is not tested yet.
+  reaches the fix. Patching Ubuntu hosts is not tested yet.
+- **Ubuntu Pro.** OSV's Pro ecosystem (`Ubuntu:Pro:24.04:LTS`) is queried as well. It
+  is not an addition to the release's data but covers other packages: universe
+  packages in esm-apps (223 on 24.04, e.g. 7zip, catdoc), which looked clean before,
+  and on releases past standard support the release's fixes (esm-infra). A Pro fix
+  stays `fixable` and is marked `needs noble-apps-security (Ubuntu Pro)` (report,
+  status page, host warning, held back by patch previews) unless the host's apt
+  sources include that pocket, the same way as a missing `trixie-security` on Debian.
+- **OSV failures fail Ubuntu hosts.** OSV is their only source, so when its query
+  fails they fail with `no vulnerability data for Ubuntu 24.04 LTS (noble): osv: …`
+  instead of showing 0 findings.
+- **End of support.** The inventory reads the host's
+  `/usr/share/distro-info/ubuntu.csv`. Past standard support, the host gets a warning
+  (also in `hosts check`): `Ubuntu 20.04 LTS (focal) is out of standard support since
+  2025-05-29: security fixes only through Ubuntu Pro (ESM until 2030-04-23)`, and
+  after that, or for interim releases, `out of support … no security fixes`.
 - **Security notices without a CVE.** Some Ubuntu fixes exist only as a USN (e.g.
   xz-utils USN-8945-1, sudo-rs USN-8708-1, ca-certificates updates). A USN is reported
   as `USN-…` where no CVE record of the package covers one of its CVEs; regression
@@ -24,7 +38,9 @@ commits.
 - **Links:** on Ubuntu hosts, CVEs link to `ubuntu.com/security/CVE-…` in alert mails
   and on the status page (where every host listing the CVE runs Ubuntu), USNs to
   `ubuntu.com/security/notices/`.
-- **OSV skips withdrawn records.**
+- **OSV skips withdrawn records**, and a record without any entry for the queried
+  ecosystem and package no longer counts as affecting it (OSV matches ecosystems
+  loosely).
 
 ### Hosts and inventory
 

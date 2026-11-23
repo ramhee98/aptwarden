@@ -95,6 +95,8 @@ def host_notes(inv: HostInventory, findings: list[Finding] | None = None) -> lis
         packages = len({f.source_package for f in found})
         notes.append(f"apt sources lack {repos}: {len(found)} fixable vulnerabilities in "
                      f"{packages} packages cannot be installed until it is added")
+    if note := inventory.support_note(inv):
+        notes.append(note)
     if inv.facts.get("reboot_required") == "yes":
         notes.append("reboot required")
     if inv.facts.get("unattended_upgrade_periodic", "0") not in ("", "0"):
@@ -235,6 +237,19 @@ class Runner:
         # Live sources (OSV) update the status object returned by refresh() while
         # matching, so run.sources reflects query failures too.
         per_source = [(src.priority, src.match(inventories)) for src in self.sources]
+        # A live source whose query failed has no data this run. Hosts only it
+        # covers (Ubuntu: only OSV) would show 0 findings and look clean.
+        failed_live = {st.name: st.message for st in run.sources if not st.ok
+                       and any(src.live and src.name == st.name for src in self.sources)}
+        if failed_live:
+            for inv in list(inventories):
+                covering = self.covering_sources(inv)
+                if covering and all(name in failed_live for name in covering):
+                    collected[inv.host] = inventory.InventoryError(
+                        f"no vulnerability data for {inv.release_label()}: "
+                        + "; ".join(f"{n}: {failed_live[n] or 'failed'}" for n in covering))
+                    inventories.remove(inv)
+                    del run.inventories[inv.host]
 
         findings = {
             inv.host: merge([(prio, res.get(inv.host, [])) for prio, res in per_source])
@@ -243,6 +258,8 @@ class Runner:
         tracker = next((s for s in self.sources if s.name == "debian_tracker"), None)
         if tracker is not None and tracker.has_data():
             for inv in inventories:
+                if inv.distro != "debian":
+                    continue  # the tracker's repositories are Debian's; OSV marks Ubuntu Pro
                 mark_missing_sources(findings[inv.host], inv.apt_suites(),
                                      lambda src, rel=inv.codename: tracker.repositories(src, rel))
         enrich(findings, self.cvss, self.kev, {inv.host: inv.distro for inv in inventories})

@@ -4,7 +4,13 @@ import pytest
 
 from aptwarden.http import HttpError, Response
 from aptwarden.models import FindingStatus, HostInventory, Package
-from aptwarden.sources.osv import OsvSource, ecosystem, evaluate_ranges, normalize_id
+from aptwarden.sources.osv import (
+    OsvSource,
+    ecosystem,
+    evaluate_ranges,
+    normalize_id,
+    pro_ecosystem,
+)
 from tests.conftest import FakeHttp, fixture_json, json_response
 
 URL = "https://api.osv.dev"
@@ -100,7 +106,7 @@ def test_match_ubuntu(cache):
     src = OsvSource(SETTINGS, cache, http)
     assert src.covers(ubuntu_inventory())
     findings = {f.vuln_id: f for f in src.match([ubuntu_inventory()])["u1"]}
-    assert seen == ["Ubuntu:24.04:LTS"]
+    assert seen == ["Ubuntu:24.04:LTS", "Ubuntu:Pro:24.04:LTS"]  # no Pro entries here
     assert set(findings) == {"CVE-2026-109518", "CVE-2026-2", "USN-9100-1"}
     fixed = findings["CVE-2026-109518"]
     assert (fixed.status, fixed.fixed_version) == (FindingStatus.FIXABLE, "2.8.4ubuntu0.1")
@@ -120,8 +126,9 @@ def test_evaluate_ranges_real_record():
     rec = fixture_json("osv-DEBIAN-CVE-2025-11187.json")
     assert evaluate_ranges(rec, ECO, "openssl", "3.5.1-1") == (True, "3.5.4-1~deb13u2")
     assert evaluate_ranges(rec, ECO, "openssl", "3.5.4-1~deb13u2") == (False, None)
-    # other ecosystem or package: not covered by a range
-    assert evaluate_ranges(rec, ECO, "gnutls28", "1.0")[1] is None
+    # other ecosystem or package: no entry, not affected
+    assert evaluate_ranges(rec, ECO, "gnutls28", "1.0") == (False, None)
+    assert evaluate_ranges(rec, "Debian:12:extra", "openssl", "3.5.1-1") == (False, None)
 
 
 def test_evaluate_ranges_variants():
@@ -243,3 +250,72 @@ def test_non_debian_host_warns(cache):
         ("POST", f"{URL}/v1/querybatch"): batch_route({})}))
     assert src.match([inv]) == {"web01": []}
     assert src.host_warnings["web01"]
+
+
+def pro_record(vid, package, eco, events, kind="apps", codename="noble"):
+    return {"id": vid, "modified": "2026-01-01T00:00:00Z", "upstream": [vid.removeprefix("UBUNTU-")],
+            "related": [], "details": f"{vid} details",
+            "affected": [{"package": {"name": package, "ecosystem": eco,
+                                      "purl": f"pkg:deb/ubuntu/{package}?arch=source&distro="
+                                              f"esm-{kind}%2F{codename}"},
+                          "ranges": [{"type": "ECOSYSTEM", "events": events}]}]}
+
+
+def pro_setup(cache, suites):
+    std, pro = "Ubuntu:24.04:LTS", "Ubuntu:Pro:24.04:LTS"
+    recs = {
+        # universe package only Pro tracks: fixed there
+        "UBUNTU-CVE-2026-10": pro_record("UBUNTU-CVE-2026-10", "7zip", pro,
+                                         [{"introduced": "0"}, {"fixed": "23.01+dfsg-11ubuntu0.1~esm1"}]),
+        # ... and open there
+        "UBUNTU-CVE-2026-11": pro_record("UBUNTU-CVE-2026-11", "7zip", pro, [{"introduced": "0"}]),
+    }
+    # open in the release, fixed in Pro (esm-infra): one record with both entries
+    both = pro_record("UBUNTU-CVE-2026-12", "zlib", std, [{"introduced": "0"}])
+    both["affected"].append(pro_record("x", "zlib", pro, [{"introduced": "0"}, {"fixed": "1:1.3-1ubuntu0.1~esm1"}],
+                                       kind="infra")["affected"][0])
+    recs[both["id"]] = both
+    # fixed in the release already: Pro adds nothing
+    done = pro_record("UBUNTU-CVE-2026-13", "zlib", std, [{"introduced": "0"}, {"fixed": "1:1.3-1ubuntu0.2"}])
+    done["affected"].append(pro_record("x", "zlib", pro, [{"introduced": "0"}, {"fixed": "1:1.3-1ubuntu0.1~esm2"}])["affected"][0])
+    recs[done["id"]] = done
+    ids = [{"id": v, "modified": r["modified"]} for v, r in recs.items()]
+
+    def route(headers, data):
+        return json_response({"results": [{"vulns": ids} for _ in json.loads(data)["queries"]]})
+
+    http = FakeHttp({("POST", f"{URL}/v1/querybatch"): route,
+                     **{("GET", f"{URL}/v1/vulns/{v}"): json_response(r) for v, r in recs.items()}})
+    inv = HostInventory("u1", "ubuntu", "24.04", "noble", "trixie/sid", "amd64", [
+        Package("7zip", "23.01+dfsg-11", "amd64", "7zip", "23.01+dfsg-11", "ii "),
+        Package("zlib1g:amd64", "1:1.3-1", "amd64", "zlib", "1:1.3-1", "ii "),
+    ], facts={"apt_suites": " ".join(suites)}, distro="ubuntu")
+    return OsvSource(SETTINGS, cache, http), inv
+
+
+def test_match_ubuntu_pro(cache):
+    src, inv = pro_setup(cache, ["noble", "noble-security", "noble-updates"])
+    found = {f.vuln_id: f for f in src.match([inv])["u1"]}
+    assert {k: (str(f.status), f.fixed_version, f.missing_source) for k, f in found.items()} == {
+        "CVE-2026-10": ("fixable", "23.01+dfsg-11ubuntu0.1~esm1",
+                        "noble-apps-security (Ubuntu Pro)"),
+        "CVE-2026-11": ("no-fix", None, None),
+        "CVE-2026-12": ("fixable", "1:1.3-1ubuntu0.1~esm1", "noble-infra-security (Ubuntu Pro)"),
+        "CVE-2026-13": ("fixable", "1:1.3-1ubuntu0.2", None),
+    }
+    assert found["CVE-2026-12"].binaries == ["zlib1g:amd64"]
+
+
+def test_match_ubuntu_pro_attached(cache):
+    src, inv = pro_setup(cache, ["noble", "noble-security", "noble-apps-security",
+                                 "noble-infra-updates"])
+    found = {f.vuln_id: f for f in src.match([inv])["u1"]}
+    assert not any(f.missing_source for f in found.values())
+    assert found["CVE-2026-12"].fixed_version == "1:1.3-1ubuntu0.1~esm1"
+
+
+def test_no_pro_for_interim_releases():
+    inv = HostInventory("h", "ubuntu", "25.10", "questing", "", "amd64", [], distro="ubuntu")
+    assert (ecosystem(inv), pro_ecosystem(inv)) == ("Ubuntu:25.10", None)
+    inv.os_version_id = "24.04"
+    assert pro_ecosystem(inv) == "Ubuntu:Pro:24.04:LTS"
