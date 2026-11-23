@@ -602,6 +602,17 @@ def test_no_newer_candidate_explains_versions(state):
     assert "candidate 3.5.1-1" in reason and "security missing" in reason
 
 
+def test_no_candidate_names_the_missing_source(state):
+    # a fix only in Ubuntu Pro: say so instead of guessing at mirrors and point releases
+    h = openssl_host()
+    h.candidates = dict(h.installed)
+    pro = "noble-apps-security (Ubuntu Pro)"
+    result, _ = run(state, h, findings=[finding(missing_source=pro)])
+    assert result.status == "nothing-to-do"
+    assert result.skipped_items[0]["skipped"] == (
+        f"fixed version 3.5.4-1 is only in {pro}, which the host's apt sources lack")
+
+
 def test_explain_helper_failure_keeps_original_message():
     from aptwarden.patch.runner import explain_helper_failure
 

@@ -5,14 +5,21 @@ commits.
 
 ## Unreleased
 
-### Ubuntu (reporting)
+### Ubuntu
 
 - **Ubuntu hosts are scanned through OSV.** The `osv` source queries Canonical's
   records in the ecosystems `Ubuntu:24.04:LTS`, `Ubuntu:25.10` etc. (LTS: April
   releases of even years). `UBUNTU-CVE-*` ids are reported as `CVE-*`. A fix in a
   record is published, so the finding is `fixable`; without a fix it is `no-fix`.
   Tested on Ubuntu 24.04 and 26.04: every fixable finding had an apt candidate that
-  reaches the fix. Patching Ubuntu hosts is not tested yet.
+  reaches the fix.
+- **Patching Ubuntu hosts works unchanged:** tested on 24.04 (87 packages) and 26.04
+  (57 packages, sudo-rs as `sudo`) in Proxmox LXCs with snapshot, needrestart, ssh,
+  systemd and HTTP healthchecks, and a rollback on both. The helper needs no change.
+- **A fix only in a repository the host lacks** (e.g. Ubuntu Pro) is skipped by patch
+  runs with that reason, `fixed version … is only in noble-apps-security (Ubuntu Pro),
+  which the host's apt sources lack`, instead of guessing at mirrors and point
+  releases.
 - **Ubuntu Pro.** OSV's Pro ecosystem (`Ubuntu:Pro:24.04:LTS`) is queried as well. It
   is not an addition to the release's data but covers other packages: universe
   packages in esm-apps (223 on 24.04, e.g. 7zip, catdoc), which looked clean before,

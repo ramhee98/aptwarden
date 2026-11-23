@@ -89,7 +89,8 @@ sources; an alias like `stable-security` there is not resolved to the codename.
   every target and, for patching, the Proxmox API (port 8006).
 - **Target hosts:** Debian (or a Debian derivative with `VERSION_CODENAME`) reachable over
   SSH. Ubuntu hosts are reported through OSV, including Ubuntu Pro fixes (keep the
-  `osv` source enabled); patching them is not supported yet. Ubuntu derivatives fail.
+  `osv` source enabled), and patched like Debian hosts (tested on 24.04 and 26.04, which
+  uses sudo-rs). Ubuntu derivatives fail.
   HTTP and TCP healthchecks run from the central host unless `on_host` is set, see
   [Healthchecks](#healthchecks-from-the-central-host-or-on-the-host).
 

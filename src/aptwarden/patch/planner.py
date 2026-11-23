@@ -31,6 +31,8 @@ class PlanItem:
     targets: dict[str, str] = field(default_factory=dict)  # binary -> candidate version
     target_source_version: str | None = None
     skipped: str | None = None
+    # the fixed version is only in these repositories, which the host's sources lack
+    missing_source: str | None = None
 
     def to_dict(self) -> dict:
         return {"source_package": self.source_package, "installed": self.installed_version,
@@ -58,6 +60,7 @@ def group(findings: list[Finding]) -> list[PlanItem]:
             item = items[key] = PlanItem(f.source_package, f.installed_version,
                                          f.fixed_version, f.severity, [], [])
         item.vulns.append(f.vuln_id)
+        item.missing_source = item.missing_source or f.missing_source
         item.binaries = sorted(set(item.binaries) | set(f.binaries))
         item.severity = max(item.severity, f.severity)
         if debversion.compare(f.fixed_version, item.fixed_version) > 0:
@@ -130,6 +133,10 @@ def resolve(item: PlanItem, candidates: dict[str, str | None],
         cand = candidates.get(binary) or candidates.get(base_name(binary))
         if cand and cand != installed.get(binary):
             targets[binary] = cand
+    if not targets and item.missing_source:
+        item.skipped = (f"fixed version {item.fixed_version} is only in {item.missing_source}, "
+                        "which the host's apt sources lack")
+        return
     if not targets:
         cands = sorted({c for b in item.binaries
                         if (c := candidates.get(b) or candidates.get(base_name(b)))})
