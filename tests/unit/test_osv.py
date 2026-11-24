@@ -194,7 +194,7 @@ def test_match_refetches_modified_records(cache):
     state = {"modified": "2026-01-01T00:00:00Z"}
     http = FakeHttp({
         ("POST", f"{URL}/v1/querybatch"): lambda h, d: json_response({"results": [{"vulns": [
-            {"id": rec["id"], "modified": state["modified"]}]}, {}]}),
+            {"id": rec["id"], "modified": state["modified"]}]}]}),
         ("GET", f"{URL}/v1/vulns/DEBIAN-CVE-2026-1"): json_response(rec),
     })
     src = OsvSource(SETTINGS, cache, http)
@@ -213,7 +213,7 @@ def test_pagination(cache):
         if len(q) == 1 and q[0].get("page_token") == "p2":
             return json_response({"results": [{"vulns": [{"id": r2["id"], "modified": "m"}]}]})
         return json_response({"results": [{"vulns": [{"id": r1["id"], "modified": "m"}],
-                                           "next_page_token": "p2"}, {}]})
+                                           "next_page_token": "p2"}]})
 
     http = FakeHttp({
         ("POST", f"{URL}/v1/querybatch"): route,
@@ -222,6 +222,65 @@ def test_pagination(cache):
     })
     result = OsvSource(SETTINGS, cache, http).match([inventory()])
     assert {f.vuln_id for f in result["web01"]} == {"CVE-2026-1", "CVE-2026-2"}
+
+
+@pytest.mark.parametrize("answer", [
+    {"results": []},  # fewer results than queries: the rest would look clean
+    {"results": [{}, {}]},
+    {"results": {"vulns": []}},
+    {"results": ["x"]},
+    {},
+    [],
+])
+def test_incomplete_batch_answer_fails_the_source(cache, answer):
+    http = FakeHttp({("POST", f"{URL}/v1/querybatch"): json_response(answer)})
+    src = OsvSource(SETTINGS, cache, http)
+    status = src.refresh()
+    assert src.match([inventory()]) == {}
+    assert not status.ok and "querybatch" in status.message
+
+
+def test_incomplete_page_fails_the_source(cache):
+    def route(headers, data):
+        if json.loads(data)["queries"][0].get("page_token"):
+            return json_response({"results": []})
+        return json_response({"results": [{"vulns": [], "next_page_token": "p2"}]})
+
+    http = FakeHttp({("POST", f"{URL}/v1/querybatch"): route})
+    src = OsvSource(SETTINGS, cache, http)
+    status = src.refresh()
+    assert src.match([inventory()]) == {}
+    assert not status.ok and "0 results for 1 queries" in status.message
+
+
+def test_unavailable_record_warns(cache):
+    """A record OSV lists but does not serve is not silently dropped: an older cached
+    copy is used, else the host gets a warning."""
+    known = record("DEBIAN-CVE-2026-1", [{"introduced": "0"}, {"fixed": "3.5.4-1"}])
+    gone = record("DEBIAN-CVE-2026-2", [{"introduced": "0"}])
+    dsa = {"id": "DSA-6000-1", "modified": "m"}
+    state = {"modified": known["modified"]}
+    http = FakeHttp({
+        ("POST", f"{URL}/v1/querybatch"): lambda h, d: batch_route({"3.5.1-1": {"vulns": [
+            {"id": known["id"], "modified": state["modified"]},
+            {"id": gone["id"], "modified": gone["modified"]}, dsa]}})(h, d),
+        ("GET", f"{URL}/v1/vulns/{known['id']}"): json_response(known),
+        ("GET", f"{URL}/v1/vulns/{gone['id']}"): Response(404),
+        ("GET", f"{URL}/v1/vulns/DSA-6000-1"): Response(404),
+    })
+    src = OsvSource(SETTINGS, cache, http)
+    status = src.refresh()
+    result = src.match([inventory("a"), inventory("b", version="3.5.4-1")])
+    assert status.ok and [f.vuln_id for f in result["a"]] == ["CVE-2026-1"]
+    warning = ("OSV did not return 1 vulnerability records it listed for this host "
+               "(HTTP 404), their findings may be missing: DEBIAN-CVE-2026-2")
+    assert src.host_warnings == {"a": [warning]}  # b has other versions, not queried
+    # the known record is modified upstream and then not served: the cached copy is used
+    state["modified"] = "2026-03-01T00:00:00Z"
+    http.routes[("GET", f"{URL}/v1/vulns/{known['id']}")] = Response(404)
+    result = src.match([inventory("a")])
+    assert [f.vuln_id for f in result["a"]] == ["CVE-2026-1"]
+    assert src.host_warnings == {"a": [warning]}
 
 
 def test_query_failure_marks_status(cache):

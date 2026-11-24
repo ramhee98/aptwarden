@@ -202,7 +202,8 @@ class OsvSource(Source):
                     wanted[(e, source, version)] = None
         try:
             results = self._querybatch(list(wanted))
-            records = self._hydrate({vid: mod for ids in results.values() for vid, mod in ids})
+            records, unavailable = self._hydrate(
+                {vid: mod for ids in results.values() for vid, mod in ids})
         except HttpError as e:
             self.last_status.ok = False
             self.last_status.message = f"query failed: {e}"
@@ -211,11 +212,18 @@ class OsvSource(Source):
 
         # findings per query, with the Ubuntu Pro kind (apps, infra) for Pro queries
         per_query: dict[Query, list[tuple[Finding, str | None]]] = {}
+        # records OSV listed for a query but could not return: their findings are missing
+        missing: dict[Query, list[str]] = {}
         for query, ids in results.items():
             findings, notices = [], []
             for vid, _ in ids:
+                if vid.startswith(_SKIP_PREFIXES):
+                    continue
+                if vid in unavailable:
+                    missing.setdefault(query, []).append(vid)
+                    continue
                 record = records.get(vid)
-                if record is None or vid.startswith(_SKIP_PREFIXES) or record.get("withdrawn"):
+                if record is None or record.get("withdrawn"):
                     continue
                 if vid.startswith(_FALLBACK_PREFIXES):
                     notices.append((vid, record))
@@ -239,12 +247,19 @@ class OsvSource(Source):
         out: dict[str, list[Finding]] = {}
         for inv in inventories:
             eco, pro = ecosystem(inv), pro_ecosystem(inv)
-            findings = []
+            findings, lost = [], set()
             for (source, version), binaries in inv.source_packages().items():
                 merged = _merge_pro(inv, per_query.get((eco, source, version), []),
                                     per_query.get((pro, source, version), []) if pro else [])
                 findings += [_with_binaries(f, binaries) for f in merged]
+                for e in filter(None, (eco, pro)):
+                    lost.update(missing.get((e, source, version), []))
             out[inv.host] = findings
+            if lost:
+                self.host_warnings.setdefault(inv.host, []).append(
+                    f"OSV did not return {len(lost)} vulnerability records it listed for "
+                    f"this host (HTTP 404), their findings may be missing: "
+                    + ", ".join(sorted(lost)))
         return out
 
     def _finding(self, query: Query, vid: str, record: dict,
@@ -276,13 +291,12 @@ class OsvSource(Source):
         for start in range(0, len(queries), BATCH_SIZE):
             chunk = queries[start:start + BATCH_SIZE]
             body = {"queries": [_query_body(q) for q in chunk]}
-            data = self._post("/v1/querybatch", body)
-            for query, res in zip(chunk, data.get("results", []), strict=False):
+            data = self._batch(body)
+            for query, res in zip(chunk, data, strict=True):
                 ids = [(v["id"], v.get("modified", "")) for v in res.get("vulns", [])]
                 token = res.get("next_page_token")
                 while token:
-                    page = self._post("/v1/querybatch",
-                                      {"queries": [_query_body(query, token)]})["results"][0]
+                    [page] = self._batch({"queries": [_query_body(query, token)]})
                     ids += [(v["id"], v.get("modified", "")) for v in page.get("vulns", [])]
                     token = page.get("next_page_token")
                 results[query] = ids
@@ -290,15 +304,29 @@ class OsvSource(Source):
                                        "with_vulns": sum(1 for v in results.values() if v)})
         return results
 
-    def _post(self, path: str, body: dict) -> dict:
-        resp = self.http.post_json(self.url + path, body)
+    def _batch(self, body: dict) -> list[dict]:
+        """The results of a querybatch, one per query and in their order. A shorter
+        answer would make the queries without a result look free of vulnerabilities."""
+        url = self.url + "/v1/querybatch"
+        resp = self.http.post_json(url, body)
         if resp.status != 200:
-            raise HttpError(self.url + path, f"HTTP {resp.status}", resp.status)
-        return resp.json()
+            raise HttpError(url, f"HTTP {resp.status}", resp.status)
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise HttpError(url, "response is not JSON") from e
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list) or not all(isinstance(r, dict) for r in results):
+            raise HttpError(url, "response has no results list")
+        if len(results) != len(body["queries"]):
+            raise HttpError(url, f"{len(results)} results for {len(body['queries'])} queries")
+        return results
 
-    def _hydrate(self, wanted: dict[str, str]) -> dict[str, dict]:
-        """Return full records for ``{id: modified}``, from cache where current."""
+    def _hydrate(self, wanted: dict[str, str]) -> tuple[dict[str, dict], set[str]]:
+        """Return full records for ``{id: modified}``, from cache where current, and
+        the ids OSV did not return (HTTP 404) and no older copy is cached of."""
         records: dict[str, dict] = {}
+        stale: dict[str, dict] = {}
         missing = []
         for vid, modified in wanted.items():
             row = self.cache.db.execute(
@@ -308,6 +336,8 @@ class OsvSource(Source):
                 records[vid] = json.loads(row[1])
             else:
                 missing.append(vid)
+                if row:
+                    stale[vid] = json.loads(row[1])
 
         def fetch(vid: str):
             # the ids come from OSV's own answer; quoted so they cannot change the path
@@ -319,6 +349,7 @@ class OsvSource(Source):
                 raise HttpError(url, f"HTTP {resp.status}", resp.status)
             return vid, resp.json()
 
+        unavailable = set()
         if missing:
             with ThreadPoolExecutor(max_workers=self.settings.get("workers", 8)) as pool:
                 fetched = list(pool.map(fetch, missing))
@@ -326,6 +357,12 @@ class OsvSource(Source):
             with self.cache.db:
                 for vid, record in fetched:
                     if record is None:
+                        # listed by querybatch, but not served (yet or any more)
+                        log.warning("osv record not found", extra={"id": vid})
+                        if vid in stale:
+                            records[vid] = stale[vid]  # the last copy is better than none
+                        else:
+                            unavailable.add(vid)
                         continue
                     records[vid] = record
                     # Key on querybatch's "modified": the record itself carries
@@ -335,7 +372,7 @@ class OsvSource(Source):
                         (vid, wanted[vid], json.dumps(record), now),
                     )
         log.info("osv records hydrated", extra={"total": len(wanted), "fetched": len(missing)})
-        return records
+        return records, unavailable
 
 
 def _query_body(query: Query, page_token: str | None = None) -> dict:

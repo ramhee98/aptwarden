@@ -87,7 +87,11 @@ previews hold the package back.
 OSV's Debian records (`DEBIAN-CVE-*`) are generated from the Debian tracker. For dpkg
 packages they mainly add redundancy if the tracker is unavailable. aptwarden queries
 `/v1/querybatch` with source package and source version, then hydrates every
-vulnerability once. Hydrated records are cached by `(id, modified)`. OSV becomes more
+vulnerability once. Hydrated records are cached by `(id, modified)`. A batch answer
+must have exactly one result per query, otherwise the source fails for the run: a
+query without a result would look free of vulnerabilities. A listed record that OSV
+does not serve (HTTP 404) is taken from the cache in an older version if there is one;
+otherwise the hosts it was listed for get a warning naming it. OSV becomes more
 important for Docker images and language ecosystems later.
 
 For Ubuntu hosts OSV is the only source so far. Canonical publishes `UBUNTU-CVE-*`

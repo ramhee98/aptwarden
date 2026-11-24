@@ -21,6 +21,13 @@ commits.
   rollback, and its reason says "healthchecks still fail after rollback", as an
   automatic rollback's does. Before, it reported success as soon as the host was
   reachable again. The patch result has a new field `unhealthy_after_rollback` (JSON).
+- **An incomplete OSV answer fails the source** instead of hiding findings. A
+  querybatch answer (or page) with fewer or more results than queries, or without a
+  results list, is an OSV failure like an HTTP error, so Ubuntu hosts fail for the run.
+  A record OSV lists but does not serve (HTTP 404) is taken from the cache in an older
+  version if there is one, otherwise the host gets a warning naming it ("OSV did not
+  return … records …, their findings may be missing"). Before, both were skipped
+  silently.
 
 ## 0.10.0 (2026-11-23)
 
