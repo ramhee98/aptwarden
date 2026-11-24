@@ -17,6 +17,10 @@ commits.
   never patched, e.g. because its healthchecks fail before patching or its simulation
   is refused, shows up in `systemctl --failed`. It still raises no alert and sends a
   mail only when the reason is new. Before, such a run exited with 0.
+- **`aptwarden rollback` exits with 1 when the healthchecks still fail** after the
+  rollback, and its reason says "healthchecks still fail after rollback", as an
+  automatic rollback's does. Before, it reported success as soon as the host was
+  reachable again. The patch result has a new field `unhealthy_after_rollback` (JSON).
 
 ## 0.10.0 (2026-11-23)
 

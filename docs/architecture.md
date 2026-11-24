@@ -190,8 +190,11 @@ plan → preflight → simulate → snapshot → apply → restart → healthche
    dies mid-response) is a failed check.
 8. **rollback:** Proxmox rollback with `start=1`. For a running LXC this takes about
    3 s, because Proxmox stops and restarts the container itself. aptwarden then waits
-   for the host and runs the healthchecks again. With `rollback: manual` it only
-   alerts; `aptwarden rollback --host H` does it later.
+   for the host and runs the healthchecks again. If they still fail, the status stays
+   `rolled-back` (the rollback worked, and it is an alert anyway) and the reason says
+   "healthchecks still fail after rollback". With `rollback: manual` it only alerts;
+   `aptwarden rollback --host H` does it later and exits with 1 if the rollback failed
+   or the healthchecks still fail afterwards.
 9. **cleanup:** at the end of a patch run, or with `aptwarden snapshots cleanup`,
    recorded snapshots (active or rolled back) older than `snapshots.keep` are deleted.
    A snapshot still needed for a rollback (`needs-manual-rollback`, `failed`,

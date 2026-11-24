@@ -597,7 +597,9 @@ def cmd_rollback(args, cfg: config.Config) -> int:
     print(f"{host.name}: {result.status} ({result.reason})")
     for x in result.health_after:
         print(f"  health: {x}")
-    return EXIT_OK if result.status == "rolled-back" else EXIT_PROBLEM
+    # rolled back, but a service is still down: not a success
+    return EXIT_OK if result.status == "rolled-back" and not result.unhealthy_after_rollback \
+        else EXIT_PROBLEM
 
 
 def cmd_snapshots_list(args, cfg: config.Config) -> int:

@@ -130,6 +130,7 @@ class FakeProvider(SnapshotProvider):
         self.snaps: dict[str, dict] = {}
         self.rolled_back: list[str] = []
         self.fail_rollback = False
+        self.healthy_after_rollback = True
         self.guest = GuestIdentity("node/lxc/100", "web01", frozenset({"bc:24:11:00:00:01"}))
 
     def check(self):
@@ -146,7 +147,7 @@ class FakeProvider(SnapshotProvider):
         if self.fail_rollback:
             raise SnapshotError("rollback task failed")
         self.h.installed = dict(self.snaps[ref.name])
-        self.h.healthy = True
+        self.h.healthy = self.healthy_after_rollback
         self.h.boots += 1  # the container restarts
         self.rolled_back.append(ref.name)
 
@@ -261,6 +262,17 @@ def test_rollback_failure(state):
     provider.fail_rollback = True
     result, _ = run(state, h, provider=provider)
     assert result.status == "rollback-failed" and "rollback task failed" in result.reason
+
+
+def test_healthchecks_failing_after_the_rollback(state):
+    h = openssl_host(healthy_after_install=False)
+    provider = FakeProvider(h)
+    provider.healthy_after_rollback = False
+    result, _ = run(state, h, provider=provider)
+    assert result.status == "rolled-back" and result.alert  # the rollback itself worked
+    assert result.unhealthy_after_rollback
+    assert result.reason.endswith("; healthchecks still fail after rollback")
+    assert result.health_after == ["systemd ssh.service: FAILED (failed)"]
 
 
 def test_install_failure_rolls_back(state):
@@ -568,7 +580,19 @@ def test_manual_rollback(state):
     out = PatchRunner(state, [], sleep=lambda s: None).manual_rollback(
         host_config(), ScriptedTransport(h), provider, ref, "r2")
     assert out.status == "rolled-back" and h.installed["openssl"] == "3.5.1-1"
+    assert not out.unhealthy_after_rollback and out.reason == f"manual rollback to {ref.name}"
     assert state.snapshots("web01", state=None)[0]["state"] == "rolled-back"
+
+
+def test_manual_rollback_with_failing_healthchecks(state):
+    h = openssl_host()
+    result, provider = run(state, h)
+    provider.healthy_after_rollback = False
+    out = PatchRunner(state, [], sleep=lambda s: None).manual_rollback(
+        host_config(), ScriptedTransport(h), provider, SnapshotRef(**result.snapshot), "r2")
+    assert out.status == "rolled-back" and out.unhealthy_after_rollback
+    assert "healthchecks still fail after rollback" in out.reason
+    assert out.health_after == ["systemd ssh.service: FAILED (failed)"]
 
 
 # real messages captured from a Debian 13 host

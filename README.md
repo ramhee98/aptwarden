@@ -787,6 +787,7 @@ aptwarden patch --host H --min-severity medium   # this run only: also patch med
 aptwarden patch --host H --all-severities        # this run only: every fixable finding
 aptwarden patches [--host H]           # patch history
 aptwarden rollback --host H            # roll back to the newest aptwarden snapshot (asks first)
+                                       # exit 1: rollback failed or healthchecks still fail
 aptwarden snapshots list               # snapshots aptwarden created
 aptwarden snapshots cleanup [--dry-run]
 aptwarden hosts check                  # also checks helper/sudo, snapshots, healthchecks

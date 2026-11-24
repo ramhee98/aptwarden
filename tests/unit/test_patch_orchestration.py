@@ -262,6 +262,38 @@ def test_rollback_asks_before_taking_the_patch_lock(make_config, capsys, monkeyp
     _PatchLock(cfg.state_dir / "patch.lock").release()  # released again
 
 
+@pytest.mark.parametrize("healthy, code", [(True, 0), (False, 1)])
+def test_rollback_exit_code_follows_the_healthchecks(make_config, capsys, monkeypatch,
+                                                      healthy, code):
+    from functools import partial
+    from types import SimpleNamespace
+
+    from aptwarden import cli
+
+    cfg = cfg_with(make_config)
+    h = openssl_host()
+    provider = FakeProvider(h)
+    provider.snaps["aptw_r"] = dict(h.installed)
+    provider.healthy_after_rollback = healthy
+    Runner(cfg).state.add_snapshot("fake", "node/lxc/100", "aptw_r", "web01", "r")
+
+    class Factory:
+        def create(self, host):
+            return ScriptedTransport(h)
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setattr(Runner, "provider", lambda self, host: provider)
+    monkeypatch.setattr("aptwarden.transport.TransportFactory", Factory)
+    monkeypatch.setattr("aptwarden.patch.runner.PatchRunner",
+                        partial(PatchRunner, sleep=lambda s: None))
+    assert cli.cmd_rollback(SimpleNamespace(host="web01", snapshot=None, yes=True), cfg) == code
+    out = capsys.readouterr().out
+    assert out.startswith("web01: rolled-back (manual rollback to aptw_r")
+    assert ("healthchecks still fail after rollback" in out) is not healthy
+
+
 def test_snapshot_cleanup(make_config):
     cfg = cfg_with(make_config)
     h = openssl_host()

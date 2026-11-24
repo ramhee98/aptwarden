@@ -157,6 +157,8 @@ class HostPatchResult:
     rebooted: bool = False
     health_before: list[str] = field(default_factory=list)
     health_after: list[str] = field(default_factory=list)
+    # healthchecks still fail after a rollback: rolled back, but the host is not well
+    unhealthy_after_rollback: bool = False
     notes: list[str] = field(default_factory=list)
     repeated: bool = False  # same status and reason as the host's previous patch run
     started_at: str = field(default_factory=utcnow)
@@ -378,7 +380,7 @@ class PatchRunner:
             if not self._wait_back(t, marker):
                 raise TransportError("host not reachable after rollback")
             if host.healthchecks:
-                result.health_after = [str(c) for c in self._health(t, host)]
+                self._health_after_rollback(result, t, host)
             result.status = "rolled-back"
         except (TransportError, SnapshotError) as e:
             result.status = "rollback-failed"
@@ -391,6 +393,14 @@ class PatchRunner:
         self.state.save_patch(run_id, host.name, result.status, result.started_at,
                               result.to_dict())
         return result
+
+    def _health_after_rollback(self, result: HostPatchResult, t: Transport,
+                               host: HostConfig) -> None:
+        after = self._health(t, host)
+        result.health_after = [str(c) for c in after]
+        if not all(c.ok for c in after):
+            result.unhealthy_after_rollback = True
+            result.reason += "; healthchecks still fail after rollback"
 
     def _verify(self, t: Transport, targets: dict[str, str]) -> None:
         out = t.run(["dpkg-query", "-W", "-f=${binary:Package}\\t${Version}\\n",
@@ -466,11 +476,8 @@ class PatchRunner:
             self.state.set_snapshot_state(ref.provider, ref.target, ref.name, "rolled-back")
             if not self._wait_back(t, marker):
                 raise TransportError("host not reachable after rollback")
-            after = self._health(t, host)
-            result.health_after = [str(c) for c in after]
+            self._health_after_rollback(result, t, host)
             result.status = "rolled-back"
-            if not all(c.ok for c in after):
-                result.reason += "; healthchecks still fail after rollback"
         except (TransportError, SnapshotError) as e:
             result.status = "rollback-failed"
             result.reason += f"; rollback failed: {e}"
