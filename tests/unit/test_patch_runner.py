@@ -6,7 +6,14 @@ from aptwarden import config
 from aptwarden.definitions import parse as parse_definition
 from aptwarden.models import Finding, FindingStatus, HostInventory, Package, Severity
 from aptwarden.patch.runner import HELPER_VERSION, PatchRunner
-from aptwarden.snapshot import NoSnapshots, SnapshotError, SnapshotProvider, SnapshotRef
+from aptwarden.snapshot import (
+    GuestIdentity,
+    NoSnapshots,
+    SnapshotError,
+    SnapshotProvider,
+    SnapshotRef,
+    identity_problem,
+)
 from aptwarden.state import State
 from aptwarden.transport import CommandResult, Transport
 from tests.unit.test_definitions import defn
@@ -33,6 +40,7 @@ class Host:
     pending: str = ""  # what the helper prints after "needrestart restart"
     reboot_required: bool = False
     boots: int = 0
+    macs: tuple[str, ...] = ("00:00:00:00:00:00", "BC:24:11:00:00:01")  # lo, eth0
     calls: list[list[str]] = field(default_factory=list)
 
 
@@ -108,6 +116,8 @@ class ScriptedTransport(Transport):
             return ok(f"boot-{h.boots}\n1 (systemd) S {fields} {1000 + h.boots}\n")
         if argv[:2] == ["systemctl", "is-active"]:
             return ok("active\n") if h.healthy else ok("failed\n", rc=3)
+        if argv == ["sh", "-c", "uname -n; cat /sys/class/net/*/address"]:
+            return ok("web01\n" + "".join(f"{m.lower()}\n" for m in h.macs))
         return ok(rc=127, err=f"unexpected command {argv}")
 
 
@@ -120,9 +130,13 @@ class FakeProvider(SnapshotProvider):
         self.snaps: dict[str, dict] = {}
         self.rolled_back: list[str] = []
         self.fail_rollback = False
+        self.guest = GuestIdentity("node/lxc/100", "web01", frozenset({"bc:24:11:00:00:01"}))
 
     def check(self):
         return self.problems
+
+    def identity(self):
+        return self.guest
 
     def create(self, name, description):
         self.snaps[name] = dict(self.h.installed)
@@ -338,6 +352,38 @@ def test_snapshot_not_supported_aborts(state):
     h = openssl_host()
     result, _ = run(state, h, provider=FakeProvider(h, ["mp0 on dir storage"]))
     assert result.status == "aborted" and "mp0 on dir storage" in result.reason
+
+
+def test_identity_problem():
+    guest = GuestIdentity("pve/lxc/139", "web01", frozenset({"bc:24:11:00:00:01"}))
+    assert identity_problem(guest, "other", {"bc:24:11:00:00:01", "02:00:00:00:00:09"}) is None
+    problem = identity_problem(guest, "web01", {"bc:24:11:00:00:02"})
+    assert problem == ("pve/lxc/139 (web01) is not this host: none of its MAC addresses "
+                       "(bc:24:11:00:00:01) is on web01; check snapshot.vmid")
+    # only a guest without network devices is compared by name
+    bare = GuestIdentity("pve/qemu/200", "Web01.example.org", frozenset())
+    assert identity_problem(bare, "web01", set()) is None
+    assert "its name is not the host's (db01)" in identity_problem(bare, "db01", set())
+    assert "no name" in identity_problem(GuestIdentity("pve/qemu/200", "", frozenset()), "", set())
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_wrong_guest_aborts_before_anything(state, dry_run):
+    """A snapshot.vmid of another guest would snapshot it and roll it back on a failure."""
+    h = openssl_host(macs=("bc:24:11:00:00:99",))
+    result, provider = run(state, h, dry_run=dry_run)
+    assert result.status == "aborted" and result.stage == "preflight"
+    assert "node/lxc/100 (web01) is not this host" in result.reason
+    assert provider.snaps == {} and not helper_calls(h, "update")
+
+
+def test_guest_identity_error_aborts(state):
+    h = openssl_host()
+    provider = FakeProvider(h)
+    provider.identity = lambda: (_ for _ in ()).throw(SnapshotError("HTTP 403 Forbidden"))
+    result, _ = run(state, h, provider=provider)
+    assert result.status == "aborted" and "HTTP 403" in result.reason
+    assert provider.snaps == {}
 
 
 def test_helper_missing_aborts(state):

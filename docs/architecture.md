@@ -158,7 +158,11 @@ plan → preflight → simulate → snapshot → apply → restart → healthche
 2. **preflight:** The helper must answer via `sudo -n`. Healthchecks must be
    configured and pass *before* patching, so a pre-existing problem cannot trigger a
    rollback. The Proxmox snapshot feature must be available (a mount point on storage
-   without snapshots fails here).
+   without snapshots fails here), and the guest must be the host: one of the MAC
+   addresses of its `netN` devices must be on the host (`/sys/class/net/*/address`), or,
+   for a guest without network devices, its name must be the host's short hostname.
+   Otherwise a wrong `snapshot.vmid` would snapshot one guest, patch another and roll
+   back the first one on a failure.
 3. **simulate:** `apt-get -s install --only-upgrade pkg=ver ...` with exactly the plan.
    aptwarden aborts on any removal, any newly installed package (allowlist
    `allow_new_packages`), any upgrade outside the plan (`allow_extra_upgrades`), any
@@ -349,7 +353,7 @@ from systemd credentials (`*_file` keys) and never stored inline. On the target 
   needrestart cover the gap. The quality of the healthchecks determines the safety.
 - **LXC snapshots** fail when a mount point lives on storage without snapshot support,
   and bind mounts can prevent them depending on the configuration. `hosts check` verifies
-  the snapshot feature through the Proxmox API.
+  the snapshot feature through the Proxmox API, and that the guest is the host.
 - **PVE nodes** require `apt full-upgrade`, and selectively upgrading Proxmox packages is
   risky. Nodes default to report-only. An explicit full-upgrade mode may follow.
 - **unattended-upgrades running in parallel** is allowed. aptwarden waits for the dpkg lock

@@ -11,7 +11,7 @@ import pytest
 from aptwarden.notify import Message, Notifier, noteworthy_patches
 from aptwarden.patch.runner import HostPatchResult, PatchRunner
 from aptwarden.runner import Runner, RunReport, _PatchLock, order_by_dependencies
-from aptwarden.snapshot import SnapshotError, SnapshotRef, snapshot_name
+from aptwarden.snapshot import GuestIdentity, SnapshotError, SnapshotRef, snapshot_name
 from aptwarden.snapshot.proxmox import ProxmoxClient, ProxmoxSnapshots
 from aptwarden.sources import SourceStatus
 from aptwarden.state import HostRecord
@@ -291,11 +291,14 @@ class FakeApi:
     def __init__(self):
         self.calls = []
         self.feature = 1
+        self.config = {}
 
     def request(self, method, path, params=None):
         self.calls.append((method, path, params))
         if path.endswith("/feature"):
             return {"hasFeature": self.feature}
+        if path.endswith("/config"):
+            return self.config
         if path.endswith("/snapshot") and method == "GET":
             return [{"name": "current"}, {"name": "aptw_x"}, {"name": "manual"}]
         return "UPID:R720:1:2:3:vzsnapshot:139:aptwarden@pam!t:"
@@ -324,7 +327,20 @@ def test_proxmox_provider_calls():
         p.delete(SnapshotRef("proxmox", "R720/lxc/139", "manual"))
     with pytest.raises(SnapshotError):
         p.rollback(SnapshotRef("proxmox", "R720/lxc/138", "aptw_1"))
+    api.config = {"hostname": "throw0", "net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:7E:6D:01,"
+                                                "ip=dhcp,tag=49,type=veth",
+                  "net1": "name=eth1,bridge=vmbr1,hwaddr=bc:24:11:7e:6d:02", "mp0": "local:1"}
+    assert p.identity() == GuestIdentity("R720/lxc/139", "throw0", frozenset(
+        {"bc:24:11:7e:6d:01", "bc:24:11:7e:6d:02"}))
     q = ProxmoxSnapshots(FakeApi(), "R720", "qemu", 200, vmstate=True)
+    q.client.config = {"name": "db01", "net0": "virtio=BC:24:11:AA:BB:CC,bridge=vmbr0,firewall=1",
+                       "hostname": "ignored"}
+    assert q.identity() == GuestIdentity("R720/qemu/200", "db01",
+                                         frozenset({"bc:24:11:aa:bb:cc"}))
+    q.client.config = ["unexpected"]
+    with pytest.raises(SnapshotError):
+        q.identity()
+    q.client.calls.clear()
     q.create("aptw_2", "vm")
     assert q.client.calls[0][2]["vmstate"] == 1
 

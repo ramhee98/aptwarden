@@ -1,5 +1,8 @@
 """Proxmox VE API client (token auth) and snapshot provider.
 
+Before patching, the guest's network devices are compared with the host's, so a
+wrong VMID cannot snapshot (and roll back) another guest.
+
 The token needs VM.Audit, VM.Snapshot, VM.Snapshot.Rollback and VM.PowerMgmt
 on the guests (e.g. through a pool), nothing else. The API certificate is
 either verified against a CA file or system CAs, or pinned by its SHA-256
@@ -12,15 +15,25 @@ import hashlib
 import http.client
 import json
 import logging
+import re
 import ssl
 import time
 import urllib.parse
 from pathlib import Path
 
 from aptwarden.config import read_secret
-from aptwarden.snapshot import PREFIX, SnapshotError, SnapshotProvider, SnapshotRef
+from aptwarden.snapshot import (
+    PREFIX,
+    GuestIdentity,
+    SnapshotError,
+    SnapshotProvider,
+    SnapshotRef,
+)
 
 log = logging.getLogger(__name__)
+
+_NET_KEY = re.compile(r"net\d+")
+_MAC = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}")
 
 
 def normalize_fingerprint(fp: str) -> str:
@@ -125,6 +138,23 @@ class ProxmoxSnapshots(SnapshotProvider):
 
     def guest_config(self) -> dict:
         return self.client.request("GET", self.base + "/config") or {}
+
+    def identity(self) -> GuestIdentity:
+        """Name (LXC hostname, VM name) and the MAC addresses of the netN devices."""
+        cfg = self.guest_config()
+        if not isinstance(cfg, dict):
+            raise SnapshotError(f"proxmox {self.target}: unexpected config response")
+        macs = set()
+        for key, value in cfg.items():
+            if _NET_KEY.fullmatch(key) and isinstance(value, str):
+                # lxc: name=eth0,hwaddr=BC:24:..,bridge=..; qemu: virtio=BC:24:..,bridge=..
+                for part in value.split(","):
+                    mac = part.partition("=")[2].strip().lower()
+                    if _MAC.fullmatch(mac):
+                        macs.add(mac)
+        name = cfg.get("hostname" if self.type == "lxc" else "name")
+        return GuestIdentity(self.target, name if isinstance(name, str) else "",
+                             frozenset(macs))
 
     def check(self) -> list[str]:
         try:

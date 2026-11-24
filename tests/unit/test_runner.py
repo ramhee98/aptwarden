@@ -418,6 +418,19 @@ def test_hosts_check_names_the_time_zone(make_config, monkeypatch):
     assert any(n.endswith("(America/New_York)") for n in ny), ny
 
 
+def test_hosts_check_names_a_wrong_guest(make_config, monkeypatch):
+    from tests.unit.test_patch_runner import FakeProvider, ScriptedTransport, openssl_host
+
+    h = openssl_host(macs=("bc:24:11:00:00:99",))
+    monkeypatch.setattr(Runner, "provider", lambda self, host: FakeProvider(h))
+    cfg = make_config(hosts=[{"name": "web01", "policy": {"modes": ["patch"]}}])
+    assert cli._snapshot_readiness(cfg.hosts[0], cfg, ScriptedTransport(h)) == (
+        "snapshot NOT ready: node/lxc/100 (web01) is not this host: none of its MAC "
+        "addresses (bc:24:11:00:00:01) is on web01; check snapshot.vmid")
+    h.macs = ("bc:24:11:00:00:01",)
+    assert cli._snapshot_readiness(cfg.hosts[0], cfg, ScriptedTransport(h)) == "snapshot ok"
+
+
 @pytest.mark.parametrize("modes, enforce, version, expected", [
     (["patch"], "alert", "4", "helper 4 ok"),
     # patching needs 3: ready, and the note says what the helper cannot do yet

@@ -447,7 +447,7 @@ Patching is opt-in per host. Every configured host is always included in reports
 | Step | What happens | On failure |
 |---|---|---|
 | plan | Select fixable findings allowed by the policy (`auto_patch_severities`, `auto_patch_kev`, not restricted by a definition), refresh the package lists and resolve the apt candidates. Every installed binary of an affected source package is upgraded together. A candidate must reach the fixed *source* version and must not be blocked by a definition. | `nothing-to-do` |
-| preflight | Helper reachable via sudo, snapshot feature available, healthchecks configured **and passing** | `aborted` |
+| preflight | Helper reachable via sudo, snapshot feature available, the Proxmox guest is this host (one of its MAC addresses is on the host), healthchecks configured **and passing** | `aborted` |
 | simulate | `apt-get -s` with exactly the planned `package=version`s. Any removal, new package or upgrade outside the plan stops the run (`allow_new_packages`, `allow_extra_upgrades`). | `aborted` |
 | snapshot | Proxmox snapshot `aptw_<run-id>`, without RAM state by default | `aborted` |
 | apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg. The helper simulates again right before and refuses to install anything it was not given as `package=version`, or to remove anything. Extras allowed by the policy are passed explicitly. | rollback |
@@ -714,6 +714,12 @@ pveum user token add aptwarden@pve central --privsep 1
 pveum acl modify /pool/aptwarden-prod --users aptwarden@pve --roles AptwardenPatch
 pveum acl modify /pool/aptwarden-prod --tokens 'aptwarden@pve!central' --roles AptwardenPatch
 ```
+
+`VM.Audit` also lets aptwarden read the guest's configuration: before it patches, it
+checks that one of the guest's MAC addresses is on the host it reaches over SSH (only a
+guest without network devices is compared by name). A `snapshot.vmid` of another guest
+stops the run as `aborted`, and `hosts check` shows `snapshot NOT ready: … is not this
+host`.
 
 `token_id` in the configuration must match exactly, including the realm:
 `aptwarden@pve!central` and `aptwarden@pam!central` are different tokens, and a

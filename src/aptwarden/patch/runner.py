@@ -26,6 +26,7 @@ from aptwarden.snapshot import (
     SnapshotError,
     SnapshotProvider,
     SnapshotRef,
+    identity_problem,
     snapshot_name,
 )
 from aptwarden.state import State, utcnow
@@ -97,6 +98,20 @@ def explain_helper_failure(r, helper: str, feature: str = "patch") -> str | None
         return f"helper not usable via sudo ({raw or 'no output'}); {HELPER_HINT}"
     # keep the original message: the classification above is only a heuristic
     return f"{reason} (host said: {raw or out or 'no output'}); {HELPER_HINT}"
+
+
+def guest_problem(t: Transport, provider: SnapshotProvider) -> str | None:
+    """None if the provider's guest is the host behind ``t`` (or the provider cannot
+    tell), else why not. A wrong VMID would otherwise snapshot one guest, patch
+    another and, on a failure, roll back the first one."""
+    guest = provider.identity()
+    if guest is None:
+        return None
+    # /sys/class/net/lo always exists, so the glob matches
+    out = t.run(["sh", "-c", "uname -n; cat /sys/class/net/*/address"], timeout=15)
+    hostname, _, rest = out.check().stdout.partition("\n")
+    macs = {line.strip().lower() for line in rest.splitlines()}
+    return identity_problem(guest, hostname.strip(), macs)
 
 
 def policy_skip_reason(findings: list[Finding], policy: dict) -> str:
@@ -259,6 +274,8 @@ class PatchRunner:
                              "without a safety net")
         if snapshots and (problems := provider.check()):
             raise PatchAbort("; ".join(problems))
+        if snapshots and (problem := guest_problem(t, provider)):
+            raise PatchAbort(problem)
 
         result.stage = "plan"
         self._helper(t, host, "update", timeout=600).check()

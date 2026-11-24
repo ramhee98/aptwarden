@@ -3,6 +3,17 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
+## Unreleased
+
+### Fixes
+
+- **A wrong `snapshot.vmid` no longer snapshots and rolls back another guest.** The
+  preflight (and `hosts check`) compares the Proxmox guest with the host aptwarden
+  reaches over SSH: one of the MAC addresses of the guest's network devices must be on
+  the host, and a guest without any must have the host's short hostname as its name.
+  Otherwise the run is `aborted` before anything changes. Before, a mixed-up VMID was
+  only checked for snapshot support, so a failed patch rolled back the wrong guest.
+
 ## 0.10.0 (2026-11-23)
 
 ### Upgrade notes

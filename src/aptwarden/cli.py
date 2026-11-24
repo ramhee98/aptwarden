@@ -241,23 +241,49 @@ def _helper_readiness(h: config.HostConfig) -> list[str]:
         factory.cleanup()
 
 
-def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[str]:
-    """Problems that would stop patching this host."""
+def _snapshot_readiness(h: config.HostConfig, runner_cfg: config.Config, t) -> str:
+    """Whether the provider can snapshot the host's guest, and that it is this host."""
+    from aptwarden.patch.runner import guest_problem
     from aptwarden.runner import Runner
     from aptwarden.snapshot import SnapshotError
+    from aptwarden.transport import TransportError
+
+    runner = Runner(runner_cfg, offline=True)
+    try:
+        provider = runner.provider(h)
+        problems = provider.check()
+        if not problems and (problem := guest_problem(t, provider)):
+            problems = [problem]
+        return "snapshot ok" if not problems else "snapshot NOT ready: " + problems[0]
+    except SnapshotError as e:
+        return f"snapshot NOT ready: {e}"
+    except TransportError as e:
+        return f"snapshot NOT ready: guest identity not checked: {e}"
+    finally:
+        runner.close()
+
+
+def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[str]:
+    """Problems that would stop patching this host."""
     from aptwarden.transport import TransportError, TransportFactory
 
     notes = []
+    snapshot_note = ("no snapshots" + ("" if h.policy["allow_without_snapshot"]
+                                       else " (patching would abort)")
+                     if h.snapshot["provider"] == "none" else "")
     factory = TransportFactory()
     try:
         t = factory.create(h)
         try:
-            notes.append(_helper_note(t, h))
-            if any("http" in c and c.get("on_host") for c in h.healthchecks) and \
-                    t.run(["sh", "-c", "command -v curl"], timeout=15).returncode != 0:
-                notes.append("curl NOT installed (needed by on_host http checks)")
-        except TransportError as e:
-            notes.append(f"helper check failed: {e}")
+            try:
+                notes.append(_helper_note(t, h))
+                if any("http" in c and c.get("on_host") for c in h.healthchecks) and \
+                        t.run(["sh", "-c", "command -v curl"], timeout=15).returncode != 0:
+                    notes.append("curl NOT installed (needed by on_host http checks)")
+            except TransportError as e:
+                notes.append(f"helper check failed: {e}")
+            if not snapshot_note:
+                snapshot_note = _snapshot_readiness(h, runner_cfg, t)
         finally:
             t.close()
     finally:
@@ -276,18 +302,7 @@ def _patch_readiness(h: config.HostConfig, runner_cfg: config.Config) -> list[st
             notes.append(f"window open now ({label})")
         else:
             notes.append(f"next window {nxt[0].strftime('%a %Y-%m-%d %H:%M %Z')} ({label})")
-    if h.snapshot["provider"] == "none":
-        notes.append("no snapshots" + ("" if h.policy["allow_without_snapshot"]
-                                       else " (patching would abort)"))
-    else:
-        runner = Runner(runner_cfg, offline=True)
-        try:
-            problems = runner.provider(h).check()
-            notes.append("snapshot ok" if not problems else "snapshot NOT ready: " + problems[0])
-        except SnapshotError as e:
-            notes.append(f"snapshot NOT ready: {e}")
-        finally:
-            runner.close()
+    notes.append(snapshot_note)
     return notes
 
 
