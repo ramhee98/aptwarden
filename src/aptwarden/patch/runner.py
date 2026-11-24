@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from aptwarden import health
 from aptwarden.config import HostConfig, parse_duration
 from aptwarden.definitions import Definition
+from aptwarden.inventory import DPKG_FORMAT, InventoryError, parse_dpkg_query
 from aptwarden.log import safe
 from aptwarden.models import Finding, HostInventory
 from aptwarden.patch import apt, planner
@@ -332,6 +333,8 @@ class PatchRunner:
         if not all(c.ok for c in before):
             raise PatchAbort("healthchecks fail before patching: "
                              + "; ".join(str(c) for c in before if not c.ok))
+        # compared with the packages after the install, see _verify
+        packages_before = self._installed(t)
 
         ref = None
         if snapshots:
@@ -351,7 +354,7 @@ class PatchRunner:
         if out.returncode != 0:
             raise TransportError("apt-get install failed: "
                                  + (out.stderr or out.stdout).strip()[-800:])
-        self._verify(t, targets)
+        self._verify(t, targets, install_args, packages_before)
 
         result.stage = "restart"
         self._restart(result, host, t)
@@ -402,14 +405,45 @@ class PatchRunner:
             result.unhealthy_after_rollback = True
             result.reason += "; healthchecks still fail after rollback"
 
-    def _verify(self, t: Transport, targets: dict[str, str]) -> None:
-        out = t.run(["dpkg-query", "-W", "-f=${binary:Package}\\t${Version}\\n",
-                     *sorted(targets)]).check().stdout
-        now = dict(line.split("\t", 1) for line in out.splitlines() if "\t" in line)
-        wrong = [f"{b} is {now.get(b, now.get(apt.base_name(b), 'missing'))}, expected {v}"
-                 for b, v in targets.items() if now.get(b, now.get(apt.base_name(b))) != v]
+    def _installed(self, t: Transport) -> dict[str, str]:
+        """{binary package: version} of the installed packages."""
+        out = t.run(["dpkg-query", "-W", f"-f={DPKG_FORMAT}"]).check().stdout
+        try:
+            return {p.name: p.version for p in parse_dpkg_query(out)}
+        except InventoryError as e:
+            raise TransportError(str(e)) from e
+
+    def _verify(self, t: Transport, targets: dict[str, str], install_args: list[str],
+                before: dict[str, str]) -> None:
+        """The targets have their versions, and nothing else changed but what the helper
+        was given. The helper checks its own simulation right before installing, but
+        apt runs again after it, without a lock in between: package lists or another
+        apt run may have changed meanwhile. A change outside the plan is a failed
+        install, which rolls back."""
+        now = self._installed(t)
+
+        def version(packages: dict[str, str], name: str) -> str | None:
+            return packages.get(name, packages.get(apt.base_name(name)))
+
+        wrong = [f"{b} is {version(now, b) or 'missing'}, expected {v}"
+                 for b, v in targets.items() if version(now, b) != v]
         if wrong:
             raise TransportError("versions after install differ: " + "; ".join(wrong))
+        allowed = {apt.base_name(name): v
+                   for name, _, v in (a.partition("=") for a in install_args)}
+        unexpected = []
+        for name in sorted(before.keys() | now.keys()):
+            old, new = before.get(name), now.get(name)
+            if old == new:
+                continue
+            if new is None:
+                unexpected.append(f"{name} {old} removed")
+            elif allowed.get(apt.base_name(name)) != new:
+                unexpected.append(f"{name} {old or '(new)'} -> {new}")
+        if unexpected:
+            shown = "; ".join(unexpected[:10])
+            more = f" and {len(unexpected) - 10} more" if len(unexpected) > 10 else ""
+            raise TransportError(f"install changed packages outside the plan: {shown}{more}")
 
     def _restart(self, result: HostPatchResult, host: HostConfig, t: Transport) -> None:
         mode = host.policy["restart"]

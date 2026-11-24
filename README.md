@@ -450,7 +450,7 @@ Patching is opt-in per host. Every configured host is always included in reports
 | preflight | Helper reachable via sudo, snapshot feature available, the Proxmox guest is this host (one of its MAC addresses is on the host), healthchecks configured **and passing** | `aborted` |
 | simulate | `apt-get -s` with exactly the planned `package=version`s. Any removal, new package or upgrade outside the plan stops the run (`allow_new_packages`, `allow_extra_upgrades`). | `aborted` |
 | snapshot | Proxmox snapshot `aptw_<run-id>`, without RAM state by default | `aborted` |
-| apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg. The helper simulates again right before and refuses to install anything it was not given as `package=version`, or to remove anything. Extras allowed by the policy are passed explicitly. | rollback |
+| apply | Install exactly the simulated versions (non-interactive, keep old config files) and verify them with dpkg. The helper simulates again right before and refuses to install anything it was not given as `package=version`, or to remove anything. Extras allowed by the policy are passed explicitly. Afterwards the installed packages are compared with those before: any other change fails the install. | rollback |
 | restart | needrestart `auto` (restart the services, then check which ones still need it) / `list` / `off`; reboot `never` / `if-required` | rollback |
 | healthcheck | systemd units on the host; HTTP and TCP from the central host or, with `on_host`, on the host itself; with grace period and retries | rollback, or alert only with `rollback: manual` |
 

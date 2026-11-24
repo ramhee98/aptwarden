@@ -179,7 +179,13 @@ plan → preflight → simulate → snapshot → apply → restart → healthche
    simulates again and refuses the transaction if it differs (see
    [Target host privileges](#target-host-privileges)). A refusal (exit status 2)
    ends the run as `aborted` without a rollback, since nothing changed; the unused
-   snapshot is removed by the normal cleanup. A dpkg version check follows.
+   snapshot is removed by the normal cleanup. The helper's simulation and install are
+   two apt runs without a lock in between (apt's simulation takes none), so package
+   lists refreshed or another apt run in that moment could still change the
+   transaction. aptwarden therefore compares dpkg's list of installed packages, read
+   before the snapshot, with the list after the install: every target must have its
+   version, and any other change (a package removed, new or upgraded to a version that
+   was not given to the helper) fails the install, which rolls back.
 6. **restart:** needrestart `auto` (helper `needrestart restart`), `list` or `off`.
    needrestart's batch mode (`-b`) only lists services and never restarts them, so the
    helper lists (`-r l -b`), restarts without batch mode (`-r a -l`) and lists again.

@@ -28,6 +28,13 @@ commits.
   version if there is one, otherwise the host gets a warning naming it ("OSV did not
   return … records …, their findings may be missing"). Before, both were skipped
   silently.
+- **The install is checked against dpkg's package list, not only the targets.** The
+  helper's simulation and its install are two apt runs with no lock in between, so
+  package lists refreshed in that moment (e.g. by `apt-daily`) or another apt run
+  could still change the transaction. aptwarden now reads the installed packages
+  before the snapshot and after the install; any change that was not given to the
+  helper as `package=version` (a removal, a new package, another version) fails the
+  install and rolls back. No helper update is needed.
 
 ## 0.10.0 (2026-11-23)
 

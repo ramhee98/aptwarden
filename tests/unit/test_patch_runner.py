@@ -36,6 +36,9 @@ class Host:
     install_fails: bool = False
     install_refused: bool = False
     extra_sim: str = ""
+    # what else the real install changes (name -> version, None: removed), e.g. because
+    # the package lists changed after the helper's own simulation
+    install_also: dict[str, str | None] = field(default_factory=dict)
     needrestart: str | None = "NEEDRESTART-SVC: ssh.service\n"
     pending: str = ""  # what the helper prints after "needrestart restart"
     reboot_required: bool = False
@@ -84,6 +87,11 @@ class ScriptedTransport(Transport):
                 for a in args:
                     name, ver = a.split("=", 1)
                     h.installed[name] = ver
+                for name, ver in h.install_also.items():
+                    if ver is None:
+                        h.installed.pop(name, None)
+                    else:
+                        h.installed[name] = ver
                 if not h.healthy_after_install:
                     h.healthy = False
                 return ok()
@@ -107,8 +115,9 @@ class ScriptedTransport(Transport):
                 out.append(f"Package: {name}\nVersion: {ver}\n"
                            f"Source: {h.sources[name]} ({src_ver})\n")
             return ok("\n".join(out))
-        if argv[0] == "dpkg-query":
-            return ok("".join(f"{p}\t{h.installed[p]}\n" for p in argv[3:]))
+        if argv[:2] == ["dpkg-query", "-W"] and len(argv) == 3:
+            return ok("".join(f"{p}\t{v}\t{h.sources.get(p.split(':')[0], p)}\t\tii \tamd64\n"
+                              for p, v in h.installed.items()))
         if argv[:2] == ["test", "-e"]:
             return ok(rc=0 if h.reboot_required else 1)
         if argv[0] == "cat" and argv[1] == "/proc/sys/kernel/random/boot_id":
@@ -280,6 +289,30 @@ def test_install_failure_rolls_back(state):
     result, provider = run(state, h)
     assert result.status == "rolled-back"
     assert "apt-get install failed" in result.reason
+
+
+def test_unplanned_change_by_the_install_rolls_back(state):
+    """The helper's simulation and its install are two apt runs: what changes in
+    between (package lists, another apt run) must not slip through."""
+    h = openssl_host(install_also={"libc6": "2.41-12+deb13u4", "libgcc-s1": None})
+    h.installed.update({"libc6": "2.41-12", "libgcc-s1": "14.2.0-19"})
+    h.sources.update({"libc6": "glibc", "libgcc-s1": "gcc-14"})
+    result, provider = run(state, h)
+    assert result.status == "rolled-back" and result.stage == "rollback"
+    assert result.reason == ("apply: install changed packages outside the plan: "
+                             "libc6 2.41-12 -> 2.41-12+deb13u4; libgcc-s1 14.2.0-19 removed")
+    assert h.installed["libc6"] == "2.41-12"  # rolled back
+
+
+def test_unplanned_new_package_is_named(state):
+    h = openssl_host(install_also={f"new{i}": "1.0-1" for i in range(12)})
+    result, _ = run(state, h)
+    assert result.status == "rolled-back"
+    assert result.reason.endswith("new0 (new) -> 1.0-1; new1 (new) -> 1.0-1; "
+                                  "new10 (new) -> 1.0-1; new11 (new) -> 1.0-1; "
+                                  "new2 (new) -> 1.0-1; new3 (new) -> 1.0-1; "
+                                  "new4 (new) -> 1.0-1; new5 (new) -> 1.0-1; "
+                                  "new6 (new) -> 1.0-1; new7 (new) -> 1.0-1 and 2 more")
 
 
 def test_helper_refusal_aborts_without_rollback(state):
