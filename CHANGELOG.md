@@ -3,7 +3,20 @@
 Release notes for aptwarden. Versions before 0.4.0 are described in their release
 commits.
 
-## Unreleased
+## 0.10.1 (2026-11-24)
+
+### Upgrade notes
+
+- **No helper or configuration change is needed.**
+- **Run `aptwarden hosts check` after the update.** The preflight now requires one of
+  the MAC addresses in the Proxmox guest's configuration to be on the host. A guest
+  that overrides its MAC address itself (netplan or cloud-init `macaddress`, a bond
+  that takes another device's address) would now abort as `snapshot NOT ready: … is
+  not this host`; `hosts check` shows it before the next patch run.
+- **Aborted patches now fail the patch unit.** A host whose patch run is `aborted`
+  every time (healthchecks failing before patching, a refused simulation) makes
+  `aptwarden-patch.service` fail from now on. Fix the reason, or take the host out of
+  `modes: [patch]`.
 
 ### Fixes
 
