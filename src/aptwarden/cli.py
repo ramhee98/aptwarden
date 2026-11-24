@@ -71,7 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("patch", help="patch hosts (snapshot, update, healthcheck, rollback)")
     p.add_argument("--host", action="append", metavar="NAME")
     p.add_argument("--dry-run", action="store_true",
-                   help="plan and simulate only, change nothing")
+                   help="plan and simulate only: refreshes the package lists, installs "
+                        "nothing")
     p.add_argument("--ignore-window", action="store_true",
                    help="patch outside the maintenance window")
     sev = p.add_mutually_exclusive_group()

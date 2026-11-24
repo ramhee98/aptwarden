@@ -35,6 +35,10 @@ commits.
   before the snapshot and after the install; any change that was not given to the
   helper as `package=version` (a removal, a new package, another version) fails the
   install and rolls back. No helper update is needed.
+- **Docs: a dry run refreshes the package lists.** `patch --dry-run` was described as
+  changing nothing, but like a real run it calls the helper's `update` (`apt-get
+  update`) before planning, so the simulation uses current candidates. It still
+  installs, snapshots and restarts nothing; the README and `--help` now say so.
 
 ## 0.10.0 (2026-11-23)
 

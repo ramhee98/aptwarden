@@ -359,7 +359,7 @@ policy:
 - **Visible in the report:** the host shows `blocked versions pinned away: xz-utils
   5.6.1-1 (AW-2024-0001)` while pins are active, and `enforce_block: pin failed, …`
   as a warning if they could not be written (e.g. a helper older than version 4).
-- **Dry runs and `hosts check` change nothing.** For a pin host that does not patch,
+- **Dry runs and `hosts check` write no pins.** For a pin host that does not patch,
   `hosts check` still checks the helper.
 
 A version published after the last scan is not pinned until the next report run. Run
@@ -780,7 +780,7 @@ hosts:
 ### Commands
 
 ```sh
-aptwarden patch --dry-run [--host H]   # plan + simulation, changes nothing (ignores windows)
+aptwarden patch --dry-run [--host H]   # plan + simulation, installs nothing (ignores windows)
 aptwarden patch [--host H]             # the real thing, inside the maintenance windows
 aptwarden patch --ignore-window        # ... outside them, deliberately
 aptwarden patch --host H --min-severity medium   # this run only: also patch medium (or low)
@@ -792,6 +792,10 @@ aptwarden snapshots list               # snapshots aptwarden created
 aptwarden snapshots cleanup [--dry-run]
 aptwarden hosts check                  # also checks helper/sudo, snapshots, healthchecks
 ```
+
+A dry run installs, snapshots and restarts nothing, but like a real run it first
+refreshes the host's package lists (helper `update`, i.e. `apt-get update`), so the
+plan and the simulation use current candidates.
 
 `--min-severity` and `--all-severities` override `policy.auto_patch_severities` for one
 manual run, e.g. to clean up a host completely. Everything else still applies: `modes`
