@@ -463,7 +463,7 @@ The result is one of these statuses:
 | `needs-manual-rollback` | failed, `rollback: manual`; run `aptwarden rollback --host …` | **yes** |
 | `failed` | failed without a snapshot to roll back to, or the run crashed and the state of the host is unknown | **yes** |
 | `rollback-failed` | the rollback itself failed | **yes** |
-| `aborted` | stopped before any change | mail only if the reason is new |
+| `aborted` | stopped before any change; the run exits with 1 | mail only if the reason is new |
 | `nothing-to-do`, `skipped`, `dry-run` | nothing changed | no |
 
 A rollback discards everything written after the snapshot, e.g. received mail or
@@ -1160,7 +1160,7 @@ web01  192.0.2.10  Debian 13.1 (trixie)  249 packages  scanned 2026-10-22T13:18:
 | Code | Meaning |
 |---|---|
 | 0 | success |
-| 1 | a host or a data source failed |
+| 1 | a host or a data source failed, or a patch failed or was aborted |
 | 2 | configuration or usage error, or run as root on directories owned by the service user |
 
 ## Files

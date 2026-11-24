@@ -37,7 +37,9 @@ from aptwarden.transport import TransportFactory
 log = logging.getLogger(__name__)
 
 
-# A dependency ending in one of these makes its dependents skip the run.
+# A dependency ending in one of these makes its dependents skip the run, and the run
+# ends as "partial" (exit status 1). An abort changed nothing, but the host was not
+# patched; it only gets a mail when its reason is new.
 FAILED_DEPENDENCY = ALERT_STATUSES | {"aborted"}
 
 
@@ -406,7 +408,7 @@ class Runner:
         finally:
             if lock:
                 lock.release()
-        if any(p.status in ALERT_STATUSES for p in run.patches) and run.status == "ok":
+        if any(p.status in FAILED_DEPENDENCY for p in run.patches) and run.status == "ok":
             run.status = "partial"
 
     def _patch_host(self, run: RunReport, h: HostConfig, runner: PatchRunner,

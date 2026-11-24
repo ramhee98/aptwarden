@@ -11,8 +11,8 @@ TimeoutStartSec=4h
 User=aptwarden
 Group=aptwarden
 ExecStart=/usr/local/bin/aptwarden patch
-# Exit code 1 means a patch needs attention (rolled back, failed) or a host or
-# source failed: the unit is marked failed so it shows up in monitoring.
+# Exit code 1 means a patch needs attention (rolled back, failed, aborted) or a
+# host or source failed: the unit is marked failed so it shows up in monitoring.
 
 StateDirectory=aptwarden
 CacheDirectory=aptwarden

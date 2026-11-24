@@ -208,8 +208,10 @@ that fails (e.g. the result cannot be stored), the host is reported as `failed` 
 **Statuses:** `patched`, `rolled-back`, `needs-manual-rollback`, `failed`,
 `rollback-failed`, `aborted` (nothing changed), `nothing-to-do`, `skipped`,
 `dry-run`. Every status from `rolled-back` through `rollback-failed` raises an
-immediate alert and marks the run `partial`. Patch runs come from an hourly timer, so
-they only send mail when something happened or an abort has a new reason.
+immediate alert and marks the run `partial`. `aborted` marks the run `partial` too (exit
+status 1), since the host was not patched, but raises no alert. Patch runs come from an
+hourly timer, so they only send mail when something happened or an abort has a new
+reason.
 
 **Without a snapshot provider** (plain Debian servers), patching needs
 `allow_without_snapshot: true`. A failed healthcheck then ends as `failed` with an

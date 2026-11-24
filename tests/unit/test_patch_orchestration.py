@@ -121,6 +121,28 @@ def test_patch_run_end_to_end(make_config, monkeypatch):
     runner.close()
 
 
+def test_aborted_patch_marks_the_run_partial(make_config, monkeypatch):
+    """Nothing changed, but the host was not patched: exit status 1 every time, a mail
+    only when the reason is new."""
+    cfg = cfg_with(make_config, notify={"patch_summary": "immediate"})
+    runner, h, sent = patch_setup(cfg, monkeypatch)
+    h.healthy = False  # healthchecks fail before patching
+    run = runner.patch(cfg.hosts, ignore_window=True)
+    assert {p.host: p.status for p in run.patches}["web01"] == "aborted"
+    assert run.status == "partial"
+    assert [m.kind for m in sent] == ["alert", "summary"]
+    assert "web01: aborted (healthchecks fail before patching" in sent[1].body
+    sent.clear()
+    run = runner.patch(cfg.hosts, ignore_window=True)
+    assert run.status == "partial" and sent == []  # same reason: no second mail
+    # a dry run that would abort fails as well
+    h.healthy, h.helper_ok = True, False
+    run = runner.patch(cfg.hosts, dry_run=True)
+    assert {p.host: p.status for p in run.patches}["web01"] == "aborted"
+    assert run.status == "partial"
+    runner.close()
+
+
 def test_patch_digest_goes_into_the_next_report(make_config, monkeypatch):
     cfg = cfg_with(make_config)  # patch_summary: digest is the default
     runner, h, sent = patch_setup(cfg, monkeypatch)

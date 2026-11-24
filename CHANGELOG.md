@@ -13,6 +13,10 @@ commits.
   the host, and a guest without any must have the host's short hostname as its name.
   Otherwise the run is `aborted` before anything changes. Before, a mixed-up VMID was
   only checked for snapshot support, so a failed patch rolled back the wrong guest.
+- **An aborted patch makes the run exit with 1** (status `partial`), so a host that is
+  never patched, e.g. because its healthchecks fail before patching or its simulation
+  is refused, shows up in `systemctl --failed`. It still raises no alert and sends a
+  mail only when the reason is new. Before, such a run exited with 0.
 
 ## 0.10.0 (2026-11-23)
 
